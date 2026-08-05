@@ -1,0 +1,1119 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BaboLocal - 工程图纸气泡标注软件</title>
+<style>
+:root {
+  --primary: #2B579A;
+  --primary-light: #3B6DB5;
+  --bg: #1a1a2e;
+  --bg-panel: #16213e;
+  --bg-card: #0f3460;
+  --text: #e0e0e0;
+  --text-muted: #8892b0;
+  --border: #233;
+  --success: #4CAF50;
+  --danger: #f44336;
+  --warning: #ff9800;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: 'Microsoft YaHei', 'Segoe UI', sans-serif;
+  background: var(--bg); color: var(--text); height: 100vh; overflow: hidden;
+  display: flex; flex-direction: column;
+}
+/* 顶栏 */
+.topbar {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 20px; height: 56px; background: var(--bg-panel);
+  border-bottom: 1px solid var(--border); flex-shrink: 0;
+}
+.topbar h1 { font-size: 18px; color: #fff; display: flex; align-items: center; gap: 8px; }
+.topbar h1 span { color: var(--primary-light); }
+.topbar-actions { display: flex; gap: 10px; }
+.btn {
+  padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer;
+  font-size: 13px; transition: all 0.2s; display: flex; align-items: center; gap: 6px;
+}
+.btn-primary { background: var(--primary); color: #fff; }
+.btn-primary:hover { background: var(--primary-light); }
+.btn-success { background: var(--success); color: #fff; }
+.btn-success:hover { opacity: 0.9; }
+.btn-warning { background: var(--warning); color: #333; }
+.btn-warning:hover { opacity: 0.9; }
+.btn-outline { background: transparent; border: 1px solid var(--border); color: var(--text); }
+.btn-outline:hover { border-color: var(--primary-light); }
+.btn:disabled { opacity: 0.4; cursor: not-allowed; }
+/* 主区域 */
+.main { display: flex; flex: 1; overflow: hidden; }
+/* 画布区 */
+.canvas-area { flex: 1; display: flex; flex-direction: column; position: relative; overflow: hidden; }
+.toolbar {
+  display: flex; align-items: center; gap: 12px; padding: 8px 16px;
+  background: var(--bg-panel); border-bottom: 1px solid var(--border); flex-shrink: 0;
+}
+.toolbar label { font-size: 12px; color: var(--text-muted); }
+.toolbar input[type="range"] { width: 120px; }
+.toolbar .sep { width: 1px; height: 20px; background: var(--border); }
+.canvas-wrap {
+  flex: 1; overflow: auto; display: flex; align-items: flex-start; justify-content: center;
+  background: #111; position: relative; padding: 20px;
+}
+#drawingCanvas { position: relative; box-shadow: 0 4px 20px rgba(0,0,0,0.5); }
+#drawingCanvas canvas { display: block; }
+/* 上传区 */
+.upload-zone {
+  flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  border: 2px dashed var(--border); border-radius: 12px; margin: 40px; cursor: pointer;
+  transition: all 0.3s; min-height: 400px;
+}
+.upload-zone:hover, .upload-zone.dragover {
+  border-color: var(--primary-light); background: rgba(59,109,181,0.05);
+}
+.upload-zone .icon { font-size: 64px; margin-bottom: 16px; }
+.upload-zone p { color: var(--text-muted); text-align: center; line-height: 1.8; }
+.upload-zone .formats { font-size: 12px; margin-top: 8px; opacity: 0.6; }
+/* 右侧面板 */
+.sidebar {
+  width: 380px; background: var(--bg-panel); border-left: 1px solid var(--border);
+  display: flex; flex-direction: column; flex-shrink: 0;
+}
+.sidebar-header {
+  padding: 12px 16px; border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between;
+}
+.sidebar-header h3 { font-size: 14px; }
+.sidebar-header .count { background: var(--primary); padding: 2px 8px; border-radius: 10px; font-size: 12px; }
+.list-toolbar { display: flex; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--border); }
+.list-toolbar select, .list-toolbar input {
+  background: var(--bg-card); border: 1px solid var(--border); color: var(--text);
+  padding: 4px 8px; border-radius: 4px; font-size: 12px;
+}
+.dim-list { flex: 1; overflow-y: auto; }
+.dim-item {
+  padding: 10px 14px; border-bottom: 1px solid rgba(255,255,255,0.05); cursor: pointer;
+  display: flex; align-items: center; gap: 10px; transition: background 0.15s;
+}
+.dim-item:hover { background: rgba(255,255,255,0.03); }
+.dim-item.active { background: rgba(59,109,181,0.15); border-left: 3px solid var(--primary-light); }
+.dim-item.disabled { opacity: 0.3; }
+.dim-num {
+  width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center;
+  justify-content: center; font-size: 12px; font-weight: bold; color: #fff; flex-shrink: 0;
+}
+.dim-info { flex: 1; min-width: 0; }
+.dim-text { font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dim-meta { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+.dim-actions { display: flex; gap: 4px; }
+.dim-actions button {
+  background: none; border: none; color: var(--text-muted); cursor: pointer;
+  padding: 4px; border-radius: 4px; font-size: 14px;
+}
+.dim-actions button:hover { background: rgba(255,255,255,0.1); color: var(--text); }
+/* 右键菜单 */
+.context-menu {
+  position: fixed; background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: 8px; padding: 4px 0; z-index: 9999; box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+  display: none; min-width: 160px;
+}
+.context-menu button {
+  display: flex; width: 100%; align-items: center; gap: 8px; padding: 8px 16px;
+  background: none; border: none; color: var(--text); cursor: pointer; font-size: 13px;
+  text-align: left;
+}
+.context-menu button:hover { background: rgba(255,255,255,0.08); }
+.context-menu .divider { height: 1px; background: var(--border); margin: 4px 0; }
+/* 编辑弹窗 */
+.modal-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 8000;
+  display: none; align-items: center; justify-content: center;
+}
+.modal-overlay.show { display: flex; }
+.modal {
+  background: var(--bg-panel); border-radius: 12px; padding: 24px; width: 420px;
+  max-width: 90vw; box-shadow: 0 16px 48px rgba(0,0,0,0.5);
+}
+.modal h3 { margin-bottom: 16px; font-size: 16px; }
+.modal .form-group { margin-bottom: 12px; }
+.modal label { display: block; font-size: 12px; color: var(--text-muted); margin-bottom: 4px; }
+.modal input, .modal select {
+  width: 100%; padding: 8px 12px; background: var(--bg-card); border: 1px solid var(--border);
+  color: var(--text); border-radius: 6px; font-size: 13px;
+}
+.modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 20px; }
+/* Toast */
+.toast {
+  position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+  background: var(--bg-card); color: var(--text); padding: 12px 24px; border-radius: 8px;
+  border: 1px solid var(--border); z-index: 10000; font-size: 13px;
+  opacity: 0; transition: opacity 0.3s; pointer-events: none;
+}
+.toast.show { opacity: 1; }
+.toast.error { border-color: var(--danger); }
+.toast.success { border-color: var(--success); }
+/* 加载 */
+.loading {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 9000;
+  display: none; align-items: center; justify-content: center; flex-direction: column;
+}
+.loading.show { display: flex; }
+.loading .spinner {
+  width: 48px; height: 48px; border: 4px solid var(--border);
+  border-top-color: var(--primary-light); border-radius: 50%; animation: spin 0.8s linear infinite;
+}
+.loading p { margin-top: 16px; color: var(--text-muted); }
+@keyframes spin { to { transform: rotate(360deg); } }
+/* 状态栏 */
+.statusbar {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 4px 16px; background: var(--bg-panel); border-top: 1px solid var(--border);
+  font-size: 11px; color: var(--text-muted); flex-shrink: 0;
+}
+</style>
+</head>
+<body>
+<!-- 顶栏 -->
+<div class="topbar">
+  <h1>🔵 <span>Babo</span>Local 工程图纸气泡标注</h1>
+  <div class="topbar-actions">
+    <button class="btn btn-outline" onclick="document.getElementById('fileInput').click()">📁 上传图纸</button>
+    <button class="btn btn-outline" id="btnExportImage" onclick="exportImage()" disabled>🖼️ 导出图纸</button>
+    <button class="btn btn-success" id="btnExportExcel" onclick="exportExcel()" disabled>📊 导出Excel</button>
+  </div>
+  <input type="file" id="fileInput" style="display:none"
+    accept=".dxf,.pdf,.jpg,.jpeg,.png,.gif,.bmp,.webp" onchange="handleFile(this.files[0])">
+</div>
+
+<!-- 主区域 -->
+<div class="main">
+  <!-- 画布区 -->
+  <div class="canvas-area">
+    <!-- 上传区（初始显示） -->
+    <div class="upload-zone" id="uploadZone">
+      <div class="icon">📐</div>
+      <p><strong>点击或拖拽文件到此处</strong><br>支持 PDF、图片格式（JPG、PNG、GIF、BMP、WebP）和 CAD 格式（DXF）</p>
+      <p class="formats">所有数据本地处理，不上传服务器</p>
+    </div>
+
+    <!-- 工具栏（上传后显示） -->
+    <div class="toolbar" id="toolbar" style="display:none">
+      <label>气泡缩放</label>
+      <input type="range" id="bubbleScale" min="50" max="200" value="100" oninput="updateBubbleScale(this.value)">
+      <span id="scaleValue" style="font-size:12px;width:36px">100%</span>
+      <div class="sep"></div>
+      <label>气泡形状</label>
+      <select id="bubbleShape" onchange="updateBubbleShape(this.value)">
+        <option value="circle">⬭ 圆形</option>
+        <option value="triangle">▲ 三角形</option>
+        <option value="square">■ 方块</option>
+      </select>
+      <div class="sep"></div>
+      <label>类型筛选</label>
+      <select id="filterType" onchange="applyFilter()">
+        <option value="">全部</option>
+        <option value="linear">线性</option>
+        <option value="diameter">直径</option>
+        <option value="radius">半径</option>
+        <option value="angle">角度</option>
+        <option value="chamfer">倒角</option>
+        <option value="thread">螺纹</option>
+      </select>
+      <div class="sep"></div>
+      <button class="btn btn-outline" onclick="reorderDims('seq')">↕ 按顺序</button>
+      <button class="btn btn-outline" onclick="reorderDims('pos')">⊞ 按位置</button>
+      <button class="btn btn-outline" onclick="reorderDims('type')">☰ 按类型</button>
+      <div class="sep"></div>
+      <label style="color:var(--text-muted)">Shift+框选 = 手动加标</label>
+    </div>
+
+    <!-- 画布容器 -->
+    <div class="canvas-wrap" id="canvasWrap" style="display:none">
+      <div id="drawingCanvas"></div>
+    </div>
+
+    <!-- 状态栏 -->
+    <div class="statusbar" id="statusbar" style="display:none">
+      <span id="statusLeft">就绪</span>
+      <span id="statusRight"></span>
+    </div>
+  </div>
+
+  <!-- 右侧面板 -->
+  <div class="sidebar" id="sidebar" style="display:none">
+    <div class="sidebar-header">
+      <h3>📋 尺寸标注列表</h3>
+      <span class="count" id="dimCount">0</span>
+    </div>
+    <div class="list-toolbar">
+      <input type="text" id="searchInput" placeholder="搜索..." oninput="renderList()" style="flex:1">
+    </div>
+    <div class="dim-list" id="dimList"></div>
+  </div>
+</div>
+
+<!-- 右键菜单 -->
+<div class="context-menu" id="contextMenu">
+  <button onclick="ctxAction('edit')">✏️ 编辑</button>
+  <button onclick="ctxAction('disable')">🚫 禁用/启用</button>
+  <button onclick="ctxAction('top')">📌 置顶</button>
+  <button onclick="ctxAction('reset')">🔄 重置位置</button>
+  <div class="divider"></div>
+  <button onclick="ctxAction('delete')" style="color:var(--danger)">🗑️ 删除</button>
+</div>
+
+<!-- 编辑弹窗 -->
+<div class="modal-overlay" id="editModal">
+  <div class="modal">
+    <h3>编辑标注</h3>
+    <div class="form-group">
+      <label>完整标注文字</label>
+      <input type="text" id="editRawText" oninput="parseEditText(this.value)">
+    </div>
+    <div style="display:flex;gap:12px">
+      <div class="form-group" style="flex:1">
+        <label>类型</label>
+        <select id="editType">
+          <option value="linear">线性</option>
+          <option value="diameter">直径</option>
+          <option value="radius">半径</option>
+          <option value="angle">角度</option>
+          <option value="chamfer">倒角</option>
+          <option value="thread">螺纹</option>
+          <option value="text">文字</option>
+        </select>
+      </div>
+      <div class="form-group" style="flex:1">
+        <label>数量</label>
+        <input type="number" id="editQty" value="1" min="1">
+      </div>
+    </div>
+    <div style="display:flex;gap:12px">
+      <div class="form-group" style="flex:1">
+        <label>名义尺寸</label>
+        <input type="text" id="editNominal">
+      </div>
+      <div class="form-group" style="flex:1">
+        <label>符号</label>
+        <input type="text" id="editSymbol" placeholder="Ø, R, °, C, M">
+      </div>
+    </div>
+    <div style="display:flex;gap:12px">
+      <div class="form-group" style="flex:1">
+        <label>上偏差</label>
+        <input type="text" id="editUpper" placeholder="+0.02">
+      </div>
+      <div class="form-group" style="flex:1">
+        <label>下偏差</label>
+        <input type="text" id="editLower" placeholder="-0.01">
+      </div>
+    </div>
+    <div class="form-group">
+      <label>GB/T 1804-2000 公差等级</label>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <select id="gbToleranceGrade" onchange="applyGBTolerance()" style="flex:1">
+          <option value="">-- 选择精度等级 --</option>
+          <option value="f">f (精密)</option>
+          <option value="m">m (中等)</option>
+          <option value="c">c (粗糙)</option>
+          <option value="v">v (最粗)</option>
+        </select>
+        <span id="gbToleranceHint" style="font-size:12px;color:var(--text-secondary);white-space:nowrap;"></span>
+      </div>
+    </div>
+    <div class="form-group">
+      <label>备注</label>
+      <input type="text" id="editNote">
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeModal()">取消</button>
+      <button class="btn btn-primary" onclick="saveEdit()">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- 加载 -->
+<div class="loading" id="loading">
+  <div class="spinner"></div>
+  <p id="loadingText">正在处理...</p>
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
+<script>
+// ===== 全局状态 =====
+let state = {
+  projectId: null,
+  imageUrl: null,
+  imgWidth: 0,
+  imgHeight: 0,
+  dimensions: [],
+  bubbleScale: 1.0,
+  bubbleShape: 'circle',
+  filterType: '',
+  searchQuery: '',
+  selectedId: null,
+  contextDimId: null,
+  editDimId: null,
+  imgNaturalWidth: 0,
+  imgNaturalHeight: 0,
+  canvasScale: 1, // 画布缩放比例
+};
+
+const TYPE_COLORS = {
+  linear: '#4CAF50', diameter: '#2196F3', radius: '#FF9800',
+  angle: '#9C27B0', chamfer: '#607D8B', thread: '#F44336', text: '#795548',
+};
+const TYPE_LABELS = {
+  linear:'线性', diameter:'直径', radius:'半径', angle:'角度',
+  chamfer:'倒角', thread:'螺纹', text:'文字',
+};
+
+// ===== GB/T 1804-2000 线性尺寸极限偏差表 =====
+// 数值为对称公差 ± 值，单位 mm
+const GB_TOLERANCE_TABLE = [
+  { min: 0.5,  max: 3,    f: 0.05,  m: 0.1,  c: 0.2,  v: null },
+  { min: 3,    max: 6,    f: 0.05,  m: 0.1,  c: 0.3,  v: 0.5  },
+  { min: 6,    max: 30,   f: 0.1,   m: 0.2,  c: 0.5,  v: 1.0  },
+  { min: 30,   max: 120,  f: 0.15,  m: 0.3,  c: 0.8,  v: 1.5  },
+  { min: 120,  max: 400,  f: 0.2,   m: 0.5,  c: 1.2,  v: 2.5  },
+  { min: 400,  max: 1000, f: 0.3,   m: 0.8,  c: 2.0,  v: 4.0  },
+  { min: 1000, max: 2000, f: 0.5,   m: 1.2,  c: 3.0,  v: 8.0  },
+  { min: 2000, max: 4000, f: null,  m: 2.0,  c: 5.0,  v: 12.0 },
+];
+
+function lookupGBTolerance(nominal, grade) {
+  const n = parseFloat(nominal);
+  if (isNaN(n)) return null;
+  for (const row of GB_TOLERANCE_TABLE) {
+    if (n > row.min && n <= row.max) {
+      const val = row[grade];
+      if (val === null || val === undefined) return null;
+      return val;
+    }
+  }
+  return null;
+}
+
+function applyGBTolerance() {
+  const grade = document.getElementById('gbToleranceGrade').value;
+  const hint = document.getElementById('gbToleranceHint');
+  if (!grade) { hint.textContent = ''; return; }
+  const nominal = document.getElementById('editNominal').value;
+  if (!nominal || !nominal.trim()) {
+    hint.textContent = '请先输入名义尺寸';
+    hint.style.color = 'var(--danger)';
+    return;
+  }
+  const tol = lookupGBTolerance(nominal, grade);
+  if (tol === null) {
+    hint.textContent = '该尺寸范围无此等级';
+    hint.style.color = 'var(--danger)';
+    return;
+  }
+  document.getElementById('editUpper').value = '+' + tol;
+  document.getElementById('editLower').value = '-' + tol;
+  hint.textContent = `±${tol} mm`;
+  hint.style.color = 'var(--text-secondary)';
+}
+
+// ===== 文件上传 =====
+const uploadZone = document.getElementById('uploadZone');
+uploadZone.addEventListener('click', () => document.getElementById('fileInput').click());
+uploadZone.addEventListener('dragover', e => { e.preventDefault(); uploadZone.classList.add('dragover'); });
+uploadZone.addEventListener('dragleave', () => uploadZone.classList.remove('dragover'));
+uploadZone.addEventListener('drop', e => {
+  e.preventDefault(); uploadZone.classList.remove('dragover');
+  if (e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]);
+});
+
+async function handleFile(file) {
+  if (!file) return;
+  const fileSizeMB = file.size / 1024 / 1024;
+  showLoading(`正在上传 ${fileSizeMB.toFixed(1)}MB 并识别...`);
+
+  const formData = new FormData();
+  formData.append('file', file);
+  try {
+    // 使用 AbortController 设置 5 分钟超时
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 300000); // 5分钟
+
+    const res = await fetch('/api/upload', {
+      method: 'POST',
+      body: formData,
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({detail: res.statusText}));
+      throw new Error(err.detail || `上传失败 (HTTP ${res.status})`);
+    }
+    const data = await res.json();
+    state.projectId = data.project_id;
+    state.imageUrl = `/api/image/${data.project_id}`;
+    state.dimensions = data.dimensions;
+    state.imgWidth = data.width;
+    state.imgHeight = data.height;
+    showWorkspace();
+    showToast(`识别完成，共 ${data.count} 个标注`, 'success');
+  } catch (e) {
+    if (e.name === 'AbortError') {
+      showToast('上传超时，文件可能过大或识别耗时较长，请重试', 'error');
+    } else {
+      showToast(e.message, 'error');
+    }
+  } finally {
+    hideLoading();
+  }
+}
+
+// ===== 显示工作区 =====
+function showWorkspace() {
+  uploadZone.style.display = 'none';
+  document.getElementById('toolbar').style.display = 'flex';
+  document.getElementById('canvasWrap').style.display = 'flex';
+  document.getElementById('sidebar').style.display = 'flex';
+  document.getElementById('statusbar').style.display = 'flex';
+  document.getElementById('btnExportImage').disabled = false;
+  document.getElementById('btnExportExcel').disabled = false;
+
+  const canvas = document.getElementById('drawingCanvas');
+  canvas.innerHTML = '';
+
+  // 创建 canvas 元素
+  const img = new Image();
+  img.crossOrigin = 'anonymous';
+  img.onload = () => {
+    state.imgNaturalWidth = img.naturalWidth;
+    state.imgNaturalHeight = img.naturalHeight;
+
+    // 限制最大显示尺寸
+    const maxW = Math.min(window.innerWidth - 420, img.naturalWidth);
+    const scale = maxW / img.naturalWidth;
+    state.canvasScale = scale;
+
+    const dispW = img.naturalWidth * scale;
+    const dispH = img.naturalHeight * scale;
+
+    canvas.style.width = dispW + 'px';
+    canvas.style.height = dispH + 'px';
+    canvas.style.position = 'relative';
+
+    // 用 canvas 绘制
+    const c = document.createElement('canvas');
+    c.width = dispW;
+    c.height = dispH;
+    c.style.position = 'absolute';
+    c.style.top = '0';
+    c.style.left = '0';
+    const ctx = c.getContext('2d');
+    ctx.drawImage(img, 0, 0, dispW, dispH);
+    canvas.appendChild(c);
+
+    // 气泡层（绝对定位的 div）
+    const bubbleLayer = document.createElement('div');
+    bubbleLayer.id = 'bubbleLayer';
+    bubbleLayer.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;';
+    canvas.appendChild(bubbleLayer);
+
+    // 交互层（捕获鼠标事件）
+    const interactionLayer = document.createElement('div');
+    interactionLayer.id = 'interactionLayer';
+    interactionLayer.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:auto;';
+    canvas.appendChild(interactionLayer);
+
+    setupCanvasInteraction(interactionLayer);
+    renderBubbles();
+    renderList();
+    updateStatus();
+  };
+  img.src = state.imageUrl;
+}
+
+// ===== 气泡避让偏移计算 =====
+function calcBubbleOffset(origX, origY, canvasW, canvasH, placed, radius) {
+  const offsetDist = radius * 2.2;
+  const directions = [
+    [offsetDist, -offsetDist],   // 右上
+    [offsetDist, 0],             // 右
+    [0, -offsetDist],            // 上
+    [offsetDist, offsetDist],    // 右下
+    [-offsetDist, -offsetDist],  // 左上
+    [-offsetDist, 0],            // 左
+    [0, offsetDist],             // 下
+    [-offsetDist, offsetDist],   // 左下
+  ];
+  for (const [dx, dy] of directions) {
+    const nx = origX + dx, ny = origY + dy;
+    if (nx < radius || nx > canvasW - radius) continue;
+    if (ny < radius || ny > canvasH - radius) continue;
+    let collision = false;
+    for (const [px, py] of placed) {
+      const dist = Math.sqrt((nx-px)**2 + (ny-py)**2);
+      if (dist < radius * 2.0) { collision = true; break; }
+    }
+    if (!collision) return [nx, ny];
+  }
+  // 全部碰撞就用右上
+  return [
+    Math.max(radius, Math.min(origX + offsetDist, canvasW - radius)),
+    Math.max(radius, Math.min(origY - offsetDist, canvasH - radius)),
+  ];
+}
+
+// ===== 气泡渲染 =====
+function renderBubbles() {
+  const layer = document.getElementById('bubbleLayer');
+  if (!layer) return;
+  layer.innerHTML = '';
+
+  const scale = state.canvasScale;
+  // 放大气泡尺寸
+  const bubbleSize = 42 * state.bubbleScale;
+  const canvasW = state.imgNaturalWidth * scale;
+  const canvasH = state.imgNaturalHeight * scale;
+  const placed = [];
+
+  state.dimensions.forEach(dim => {
+    if (dim.disabled) return;
+    if (state.filterType && dim.type !== state.filterType) return;
+
+    const origX = dim.x * scale;
+    const origY = dim.y * scale;
+    const color = TYPE_COLORS[dim.type] || TYPE_COLORS.text;
+
+    // 计算避让偏移位置
+    const [cx, cy] = calcBubbleOffset(origX, origY, canvasW, canvasH, placed, bubbleSize/2);
+    placed.push([cx, cy]);
+
+    // 引导线（SVG）- 从文字边缘出发，不遮挡尺寸数字
+    const svgNS = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(svgNS, 'svg');
+    svg.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:5;';
+    // 计算方向向量，起点从文字边缘外侧出发
+    const ldx = cx - origX, ldy = cy - origY;
+    const ldist = Math.sqrt(ldx*ldx + ldy*ldy) || 1;
+    const startOff = 20; // 远离文字中心的偏移量
+    const endOff = bubbleSize/2 - 2; // 到气泡边缘
+    const lsx = origX + ldx/ldist * startOff;
+    const lsy = origY + ldy/ldist * startOff;
+    const lex = cx - ldx/ldist * endOff;
+    const ley = cy - ldy/ldist * endOff;
+    const line = document.createElementNS(svgNS, 'line');
+    line.setAttribute('x1', lsx);
+    line.setAttribute('y1', lsy);
+    line.setAttribute('x2', lex);
+    line.setAttribute('y2', ley);
+    line.setAttribute('stroke', color);
+    line.setAttribute('stroke-width', '2');
+    line.setAttribute('opacity', '0.6');
+    svg.appendChild(line);
+    layer.appendChild(svg);
+
+    // 气泡 div
+    const bubble = document.createElement('div');
+    bubble.className = 'bubble';
+    // 根据形状设置不同的样式
+    let shapeStyle = '';
+    let innerShapeStyle = '';
+    if (state.bubbleShape === 'triangle') {
+      shapeStyle = 'clip-path: polygon(50% 0%, 0% 100%, 100% 100%); border-radius:0;';
+      innerShapeStyle = 'clip-path: polygon(50% 0%, 0% 100%, 100% 100%); border-radius:0;';
+    } else if (state.bubbleShape === 'square') {
+      shapeStyle = 'border-radius:4px;';
+      innerShapeStyle = 'border-radius:2px;';
+    } else {
+      shapeStyle = 'border-radius:50%;';
+      innerShapeStyle = 'border-radius:50%;';
+    }
+    bubble.style.cssText = `
+      position:absolute; left:${cx - bubbleSize/2}px; top:${cy - bubbleSize/2}px;
+      width:${bubbleSize}px; height:${bubbleSize}px; ${shapeStyle}
+      background:#fff; border:3px solid ${color}; color:${color};
+      display:flex; align-items:center; justify-content:center;
+      font-size:${18 * state.bubbleScale}px; font-weight:bold;
+      cursor:move; pointer-events:auto; z-index:10;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+      user-select:none;
+    `;
+    // 内圈彩色背景
+    const inner = document.createElement('div');
+    inner.style.cssText = `position:absolute;inset:4px;${innerShapeStyle}background:${color}aa;display:flex;align-items:center;justify-content:center;`;
+    const numSpan = document.createElement('span');
+    numSpan.style.cssText = 'color:#fff;font-weight:bold;';
+    numSpan.textContent = dim.id;
+    inner.appendChild(numSpan);
+    bubble.appendChild(inner);
+    bubble.dataset.dimId = dim.id;
+
+    if (state.selectedId === dim.id) {
+      bubble.style.outline = '3px solid #FFD700';
+      bubble.style.outlineOffset = '3px';
+    }
+
+    // 拖拽
+    bubble.addEventListener('mousedown', e => startDrag(e, dim.id));
+    // 双击编辑
+    bubble.addEventListener('dblclick', e => { e.stopPropagation(); openEditModal(dim.id); });
+    // 右键菜单
+    bubble.addEventListener('contextmenu', e => { e.preventDefault(); showContextMenu(e, dim.id); });
+
+    layer.appendChild(bubble);
+  });
+}
+
+// ===== 拖拽 =====
+let dragState = null;
+function startDrag(e, dimId) {
+  e.preventDefault();
+  e.stopPropagation();
+  const dim = state.dimensions.find(d => d.id === dimId);
+  if (!dim) return;
+  const canvas = document.getElementById('drawingCanvas');
+  const rect = canvas.getBoundingClientRect();
+  dragState = {
+    dimId,
+    startMouseX: e.clientX,
+    startMouseY: e.clientY,
+    startX: dim.x,
+    startY: dim.y,
+    canvasRect: rect,
+  };
+  document.addEventListener('mousemove', onDrag);
+  document.addEventListener('mouseup', endDrag);
+  state.selectedId = dimId;
+  renderBubbles();
+  renderList();
+}
+
+function onDrag(e) {
+  if (!dragState) return;
+  const dim = state.dimensions.find(d => d.id === dragState.dimId);
+  if (!dim) return;
+  const dx = (e.clientX - dragState.startMouseX) / state.canvasScale;
+  const dy = (e.clientY - dragState.startMouseY) / state.canvasScale;
+  dim.x = dragState.startX + dx;
+  dim.y = dragState.startY + dy;
+  renderBubbles();
+}
+
+function endDrag() {
+  dragState = null;
+  document.removeEventListener('mousemove', onDrag);
+  document.removeEventListener('mouseup', endDrag);
+}
+
+// ===== Shift 框选手动加标 =====
+let boxSelectState = null;
+function setupCanvasInteraction(layer) {
+  layer.addEventListener('mousedown', e => {
+    if (e.shiftKey) {
+      e.preventDefault();
+      const rect = layer.getBoundingClientRect();
+      boxSelectState = {
+        startX: e.clientX - rect.left,
+        startY: e.clientY - rect.top,
+        layer,
+      };
+      // 创建选择框
+      const box = document.createElement('div');
+      box.id = 'selectBox';
+      box.style.cssText = 'position:absolute;border:2px dashed #FFD700;background:rgba(255,215,0,0.1);pointer-events:none;z-index:50;';
+      layer.appendChild(box);
+      document.addEventListener('mousemove', onBoxSelect);
+      document.addEventListener('mouseup', endBoxSelect);
+    }
+  });
+}
+
+function onBoxSelect(e) {
+  if (!boxSelectState) return;
+  const rect = boxSelectState.layer.getBoundingClientRect();
+  const curX = e.clientX - rect.left;
+  const curY = e.clientY - rect.top;
+  const box = document.getElementById('selectBox');
+  if (!box) return;
+  const x = Math.min(boxSelectState.startX, curX);
+  const y = Math.min(boxSelectState.startY, curY);
+  const w = Math.abs(curX - boxSelectState.startX);
+  const h = Math.abs(curY - boxSelectState.startY);
+  box.style.left = x + 'px';
+  box.style.top = y + 'px';
+  box.style.width = w + 'px';
+  box.style.height = h + 'px';
+}
+
+function endBoxSelect(e) {
+  if (!boxSelectState) return;
+  const rect = boxSelectState.layer.getBoundingClientRect();
+  const curX = e.clientX - rect.left;
+  const curY = e.clientY - rect.top;
+  const cx = (boxSelectState.startX + curX) / 2 / state.canvasScale;
+  const cy = (boxSelectState.startY + curY) / 2 / state.canvasScale;
+  const box = document.getElementById('selectBox');
+  if (box) box.remove();
+
+  // 只有框选范围够大才添加
+  if (Math.abs(curX - boxSelectState.startX) > 10 || Math.abs(curY - boxSelectState.startY) > 10) {
+    addManualDim(cx, cy);
+  }
+
+  boxSelectState = null;
+  document.removeEventListener('mousemove', onBoxSelect);
+  document.removeEventListener('mouseup', endBoxSelect);
+}
+
+function addManualDim(x, y) {
+  const maxId = Math.max(0, ...state.dimensions.map(d => d.id));
+  const newDim = {
+    id: maxId + 1,
+    raw_text: '',
+    type: 'linear',
+    symbol: '',
+    nominal: '',
+    upper_tol: '',
+    lower_tol: '',
+    quantity: 1,
+    x, y,
+    note: '手动添加',
+  };
+  state.dimensions.push(newDim);
+  renderBubbles();
+  renderList();
+  updateStatus();
+  openEditModal(newDim.id);
+}
+
+// ===== 右键菜单 =====
+function showContextMenu(e, dimId) {
+  e.preventDefault();
+  state.contextDimId = dimId;
+  const menu = document.getElementById('contextMenu');
+  menu.style.display = 'block';
+  menu.style.left = e.clientX + 'px';
+  menu.style.top = e.clientY + 'px';
+}
+
+document.addEventListener('click', () => {
+  document.getElementById('contextMenu').style.display = 'none';
+});
+
+function ctxAction(action) {
+  const dimId = state.contextDimId;
+  const dim = state.dimensions.find(d => d.id === dimId);
+  if (!dim) return;
+  switch (action) {
+    case 'edit': openEditModal(dimId); break;
+    case 'delete':
+      state.dimensions = state.dimensions.filter(d => d.id !== dimId);
+      renderBubbles(); renderList(); updateStatus();
+      showToast('已删除', 'success');
+      break;
+    case 'disable':
+      dim.disabled = !dim.disabled;
+      renderBubbles(); renderList();
+      break;
+    case 'top':
+      state.dimensions = state.dimensions.filter(d => d.id !== dimId);
+      state.dimensions.unshift(dim);
+      renumber();
+      renderBubbles(); renderList();
+      break;
+    case 'reset':
+      // 重置位置到中心（没有保存原始位置，暂时放到画布中心）
+      dim.x = state.imgNaturalWidth / 2 / state.canvasScale;
+      dim.y = state.imgNaturalHeight / 2 / state.canvasScale;
+      renderBubbles();
+      break;
+  }
+  document.getElementById('contextMenu').style.display = 'none';
+}
+
+// ===== 编辑弹窗 =====
+function openEditModal(dimId) {
+  const dim = state.dimensions.find(d => d.id === dimId);
+  if (!dim) return;
+  state.editDimId = dimId;
+  document.getElementById('editRawText').value = dim.raw_text || '';
+  document.getElementById('editType').value = dim.type || 'linear';
+  document.getElementById('editNominal').value = dim.nominal || '';
+  document.getElementById('editSymbol').value = dim.symbol || '';
+  document.getElementById('editUpper').value = dim.upper_tol || '';
+  document.getElementById('editLower').value = dim.lower_tol || '';
+  document.getElementById('editQty').value = dim.quantity || 1;
+  document.getElementById('editNote').value = dim.note || '';
+  document.getElementById('gbToleranceGrade').value = '';
+  document.getElementById('gbToleranceHint').textContent = '';
+  document.getElementById('editModal').classList.add('show');
+}
+
+function closeModal() {
+  document.getElementById('editModal').classList.remove('show');
+  state.editDimId = null;
+}
+
+function parseEditText(text) {
+  // 简单解析：自动识别符号和类型
+  const dim = state.dimensions.find(d => d.id === state.editDimId);
+  if (!dim) return;
+  let type = 'linear', symbol = '';
+  if (/[Ø⌀Φ%%Cφ]/i.test(text)) { type = 'diameter'; symbol = 'Ø'; }
+  else if (/^R\s*\d/i.test(text)) { type = 'radius'; symbol = 'R'; }
+  else if (/°|%%D/i.test(text)) { type = 'angle'; symbol = '°'; }
+  else if (/^C\s*\d/i.test(text)) { type = 'chamfer'; symbol = 'C'; }
+  else if (/^M\s*\d/i.test(text)) { type = 'thread'; symbol = 'M'; }
+  document.getElementById('editType').value = type;
+  document.getElementById('editSymbol').value = symbol;
+  // 提取名义值
+  let clean = text.replace(/[Ø⌀Φφ°%%C%%c%%D]/gi, '').replace(/^R\s*/i, '').replace(/^C\s*/i, '').replace(/^M\s*/i, '');
+  const qtyMatch = clean.match(/^(\d+)\s*[×xX]\s*(.+)/);
+  if (qtyMatch) {
+    document.getElementById('editQty').value = qtyMatch[1];
+    clean = qtyMatch[2];
+  }
+  const tolMatch = clean.match(/([+-]?\d+\.?\d*)\s*±\s*(\d+\.?\d*)/);
+  if (tolMatch) {
+    document.getElementById('editNominal').value = tolMatch[1].replace('+', '');
+    document.getElementById('editUpper').value = '+' + tolMatch[2];
+    document.getElementById('editLower').value = '-' + tolMatch[2];
+  } else {
+    const numMatch = clean.match(/(\d+\.?\d*)/);
+    if (numMatch) document.getElementById('editNominal').value = numMatch[1];
+  }
+}
+
+function saveEdit() {
+  const dim = state.dimensions.find(d => d.id === state.editDimId);
+  if (!dim) return;
+  dim.raw_text = document.getElementById('editRawText').value;
+  dim.type = document.getElementById('editType').value;
+  dim.nominal = document.getElementById('editNominal').value;
+  dim.symbol = document.getElementById('editSymbol').value;
+  dim.upper_tol = document.getElementById('editUpper').value;
+  dim.lower_tol = document.getElementById('editLower').value;
+  dim.quantity = parseInt(document.getElementById('editQty').value) || 1;
+  dim.note = document.getElementById('editNote').value;
+  closeModal();
+  renderBubbles();
+  renderList();
+  updateStatus();
+  showToast('已保存', 'success');
+}
+
+// ===== 列表渲染 =====
+function renderList() {
+  const listEl = document.getElementById('dimList');
+  const search = document.getElementById('searchInput').value.toLowerCase();
+  const filtered = state.dimensions.filter(d => {
+    if (state.filterType && d.type !== state.filterType) return false;
+    if (search) {
+      const text = `${d.raw_text} ${d.nominal} ${d.type} ${d.note}`.toLowerCase();
+      if (!text.includes(search)) return false;
+    }
+    return true;
+  });
+
+  document.getElementById('dimCount').textContent = filtered.length;
+
+  listEl.innerHTML = filtered.map(dim => {
+    const color = TYPE_COLORS[dim.type] || TYPE_COLORS.text;
+    const label = TYPE_LABELS[dim.type] || dim.type;
+    const tol = (dim.upper_tol || dim.lower_tol) ? `${dim.upper_tol || ''}/${dim.lower_tol || ''}` : '';
+    const hasTol = dim.upper_tol || dim.lower_tol;
+    const tolText = hasTol ? ` | 上偏差: ${dim.upper_tol || '—'}  下偏差: ${dim.lower_tol || '—'}` : '';
+    return `
+      <div class="dim-item ${state.selectedId === dim.id ? 'active' : ''} ${dim.disabled ? 'disabled' : ''}"
+           onclick="selectDim(${dim.id})">
+        <div class="dim-num" style="background:${color}">${dim.id}</div>
+        <div class="dim-info">
+          <div class="dim-text">${dim.symbol}${dim.nominal} ${tol}</div>
+          <div class="dim-meta">${label}${tolText} | ${dim.raw_text || '(空)'}</div>
+        </div>
+        <div class="dim-actions">
+          <button onclick="event.stopPropagation();openEditModal(${dim.id})" title="编辑">✏️</button>
+          <button onclick="event.stopPropagation();toggleDim(${dim.id})" title="禁用/启用">${dim.disabled ? '🔇' : '🔈'}</button>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+function selectDim(id) {
+  state.selectedId = id;
+  renderBubbles();
+  renderList();
+}
+
+function toggleDim(id) {
+  const dim = state.dimensions.find(d => d.id === id);
+  if (dim) { dim.disabled = !dim.disabled; renderBubbles(); renderList(); }
+}
+
+// ===== 排序 =====
+function renumber() {
+  state.dimensions.forEach((d, i) => d.id = i + 1);
+}
+
+function reorderDims(mode) {
+  if (mode === 'seq') {
+    // 按当前顺序重新编号
+    renumber();
+  } else if (mode === 'pos') {
+    // 按坐标位置（从上到下，从左到右）
+    state.dimensions.sort((a, b) => {
+      if (Math.abs(a.y - b.y) > 20) return a.y - b.y;
+      return a.x - b.x;
+    });
+    renumber();
+  } else if (mode === 'type') {
+    // 按类型分组
+    const order = ['diameter', 'radius', 'linear', 'angle', 'chamfer', 'thread', 'text'];
+    state.dimensions.sort((a, b) => {
+      const ia = order.indexOf(a.type);
+      const ib = order.indexOf(b.type);
+      return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
+    });
+    renumber();
+  }
+  renderBubbles();
+  renderList();
+  showToast('已重新排序', 'success');
+}
+
+// ===== 筛选 =====
+function applyFilter() {
+  state.filterType = document.getElementById('filterType').value;
+  renderBubbles();
+  renderList();
+}
+
+// ===== 缩放 =====
+function updateBubbleScale(val) {
+  state.bubbleScale = val / 100;
+  document.getElementById('scaleValue').textContent = val + '%';
+  renderBubbles();
+}
+
+function updateBubbleShape(val) {
+  state.bubbleShape = val;
+  renderBubbles();
+}
+
+// ===== 导出 =====
+async function exportExcel() {
+  showLoading('正在导出 Excel...');
+  try {
+    // 先同步数据
+    await fetch('/api/update', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ project_id: state.projectId, dimensions: state.dimensions }),
+    });
+    const res = await fetch('/api/export/excel', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ project_id: state.projectId, project_name: '质检报告' }),
+    });
+    if (!res.ok) throw new Error('导出失败');
+    const blob = await res.blob();
+    downloadBlob(blob, 'inspection_report.xlsx');
+    showToast('Excel 导出成功', 'success');
+  } catch (e) {
+    showToast(e.message, 'error');
+  } finally {
+    hideLoading();
+  }
+}
+
+async function exportImage() {
+  showLoading('正在导出图纸...');
+  try {
+    await fetch('/api/update', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ project_id: state.projectId, dimensions: state.dimensions }),
+    });
+    const res = await fetch('/api/export/image', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        project_id: state.projectId,
+        bubble_scale: state.bubbleScale,
+        bubble_shape: state.bubbleShape,
+      }),
+    });
+    if (!res.ok) throw new Error('导出失败');
+    const blob = await res.blob();
+    downloadBlob(blob, 'ballooned_drawing.png');
+    showToast('图纸导出成功', 'success');
+  } catch (e) {
+    showToast(e.message, 'error');
+  } finally {
+    hideLoading();
+  }
+}
+
+// ===== 工具函数 =====
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click();
+  document.body.removeChild(a); URL.revokeObjectURL(url);
+}
+
+function showLoading(text) {
+  document.getElementById('loadingText').textContent = text || '处理中...';
+  document.getElementById('loading').classList.add('show');
+}
+function hideLoading() { document.getElementById('loading').classList.remove('show'); }
+
+function showToast(msg, type) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'toast show ' + (type || '');
+  setTimeout(() => t.classList.remove('show'), 3000);
+}
+
+function updateStatus() {
+  const total = state.dimensions.length;
+  const active = state.dimensions.filter(d => !d.disabled).length;
+  document.getElementById('statusLeft').textContent = `共 ${total} 项标注 | 启用 ${active} | 禁用 ${total - active}`;
+  document.getElementById('statusRight').textContent = state.projectId || '';
+}
+
+// 点击空白取消选中
+document.addEventListener('click', e => {
+  if (!e.target.closest('.bubble') && !e.target.closest('.dim-item') && !e.target.closest('.context-menu') && !e.target.closest('.modal')) {
+    state.selectedId = null;
+    renderBubbles();
+    renderList();
+  }
+});
+
+// ===== Delete 键删除选中气泡 =====
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Delete' && e.key !== 'Backspace') return;
+  // 编辑弹窗打开时不触发
+  if (state.editDimId !== null) return;
+  // 右键菜单打开时不触发
+  const ctxMenu = document.getElementById('contextMenu');
+  if (ctxMenu && ctxMenu.style.display === 'block') return;
+  // 焦点在 input/textarea/select 中时不触发
+  const tag = document.activeElement?.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+  // 需要有选中的标注
+  if (state.selectedId === null) return;
+  e.preventDefault();
+  const dimId = state.selectedId;
+  state.dimensions = state.dimensions.filter(d => d.id !== dimId);
+  renumber();
+  state.selectedId = null;
+  renderBubbles();
+  renderList();
+  updateStatus();
+  showToast('已删除标注', 'success');
+});
+</script>
+</body>
+</html>
