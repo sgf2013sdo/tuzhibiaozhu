@@ -6,6 +6,9 @@ on:
       - 'v*'
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build-windows:
     runs-on: windows-latest
@@ -21,8 +24,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install fastapi uvicorn python-multipart pydantic pyfirmata pymupdf Pillow openpyxl ezdxf rapidocr_onnxruntime onnxruntime pywebview pyinstaller
-          pip list | grep -E "rapidocr|onnx|pyinstaller|pywebview"
+          pip install fastapi uvicorn python-multipart pydantic pymupdf Pillow openpyxl ezdxf rapidocr_onnxruntime onnxruntime pywebview pyinstaller
 
       - name: Verify imports
         run: |
