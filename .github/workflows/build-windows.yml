@@ -38,7 +38,7 @@ jobs:
       - name: Build EXE
         run: |
           pyinstaller --name BaboLocal `
-            --onefile --windowed --noconfirm `
+            --onefile --console --noconfirm `
             --add-data "frontend;frontend" `
             --add-data "backend;backend" `
             --add-data "desktop;desktop" `

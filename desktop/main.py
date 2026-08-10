@@ -4,6 +4,15 @@ BaboLocal 桌面应用启动器
 - pywebview 创建原生窗口加载前端页面
 - 启动失败时在浏览器显示错误信息
 """
+import datetime
+_STARTUP_LOG = str(__import__('pathlib').Path.home() / 'BaboLocal' / 'startup.log')
+try:
+    __import__('pathlib').Path(_STARTUP_LOG).parent.mkdir(parents=True, exist_ok=True)
+    with open(_STARTUP_LOG, 'a', encoding='utf-8') as _log:
+        _log.write(f'[{datetime.datetime.now()}] EXE started, cwd={__import__("os").getcwd()}\n')
+except:
+    pass
+
 import os
 import sys
 import time
