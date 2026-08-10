@@ -42,30 +42,23 @@ jobs:
             --add-data "frontend;frontend" `
             --add-data "backend;backend" `
             --add-data "desktop;desktop" `
-            --hidden-import uvicorn.logging `
-            --hidden-import uvicorn.loops `
-            --hidden-import uvicorn.loops.auto `
-            --hidden-import uvicorn.protocols `
-            --hidden-import uvicorn.protocols.http `
-            --hidden-import uvicorn.protocols.http.auto `
-            --hidden-import uvicorn.protocols.websockets `
-            --hidden-import uvicorn.protocols.websockets.auto `
-            --hidden-import uvicorn.lifespan `
-            --hidden-import uvicorn.lifespan.on `
+            --collect-all fastapi `
+            --collect-all starlette `
+            --collect-all uvicorn `
+            --collect-all pydantic `
+            --collect-all pymupdf `
+            --collect-all rapidocr_onnxruntime `
+            --collect-all onnxruntime `
+            --collect-all ezdxf `
+            --collect-all openpyxl `
+            --collect-all multipart `
+            --collect-all anyio `
             --hidden-import server `
             --hidden-import dxf_handler `
             --hidden-import pdf_handler `
             --hidden-import exporter `
-            --hidden-import rapidocr_onnxruntime `
-            --hidden-import rapidocr_onnxruntime.main `
-            --hidden-import onnxruntime `
-            --hidden-import onnxruntime.capi `
-            --hidden-import fitz `
-            --hidden-import ezdxf `
             --hidden-import PIL `
             --hidden-import PIL.Image `
-            --collect-all rapidocr_onnxruntime `
-            --collect-all onnxruntime `
             desktop\main.py
 
       - name: Upload artifact
