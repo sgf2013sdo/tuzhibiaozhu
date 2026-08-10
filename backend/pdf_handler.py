@@ -3,18 +3,25 @@ PDF / 图片处理器
 策略：
   1. PDF -> 先尝试 PyMuPDF 文本层提取（矢量PDF）
   2. 文本层为空或图片格式 -> 用 RapidOCR 识别文字
-  3. 正则匹配尺寸标注模式
+  3. 可选 VLM 增强：OCR 粗提取 → GLM-4V 语义分类 → 合并输出
 """
 import re
 import math
+import json
+import os
+import base64
 import tempfile
 from pathlib import Path
-from typing import List, Dict
+from typing import List, Dict, Optional
 import fitz  # PyMuPDF
 from PIL import Image
 
 # OCR 引擎懒加载（首次调用才初始化，避免启动慢）
 _ocr_engine = None
+
+# GLM-4V API 配置
+GLM_API_KEY = os.environ.get("GLM_API_KEY", "")
+GLM_BASE_URL = os.environ.get("GLM_BASE_URL", "https://open.bigmodel.cn/api/paas/v4")
 
 
 def _get_ocr():
@@ -228,6 +235,199 @@ def _filter_and_parse_ocr_results(ocr_results: list, scale_factor: float = 1.0) 
     return dimensions
 
 
+def _vlm_classify_dimensions(png_path: str, ocr_texts: list, image_w: int, image_h: int) -> list:
+    """
+    VLM 增强：将图纸图片发给 GLM-4V，识别哪些文字是尺寸标注，返回结构化数据。
+    返回: [{text, type, nominal, upper_tol, lower_tol, quantity, symbol}, ...]
+    """
+    if not GLM_API_KEY:
+        print("[INFO] GLM_API_KEY 未配置，跳过 VLM 增强")
+        return []
+
+    try:
+        # 缩放图片到 VLM 可接受的范围（最长边 1024px）
+        img = Image.open(png_path)
+        max_side = 1024
+        if img.width > max_side or img.height > max_side:
+            scale = max_side / max(img.width, img.height)
+            new_w = int(img.width * scale)
+            new_h = int(img.height * scale)
+            img = img.resize((new_w, new_h), Image.LANCZOS)
+
+        # 转 base64
+        import io
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        img_b64 = base64.b64encode(buf.getvalue()).decode()
+
+        # 构建 prompt —— 要求返回紧凑 JSON
+        # OCR 已提取的文字列表给 VLM 做参考
+        ocr_hint = "\n".join(f"- {t}" for t in ocr_texts[:30]) if ocr_texts else "(无)"
+        prompt = f"""你是工程图纸审图专家。请分析这张图纸上的所有尺寸标注，返回 JSON 数组。
+
+OCR 已识别到以下文字（仅供参考，可能含非尺寸内容）:
+{ocr_hint}
+
+返回规则：
+1. 只保留真正的尺寸标注（线性尺寸/直径/半径/角度/倒角/螺纹）
+2. 必须排除以下内容：
+   - 图纸外圈的位置序号（单独的 1,2,3... A,B,C...，通常在图纸边框外侧）
+   - 右下角标题栏信息（日期如 20240406、材料牌号如 ADC12/A356.2、文档编号、图号、重量、公司名、表面处理说明）
+   - 形位公差标注框（如"// 0.05 A"等）
+   - 粗糙度符号（如 Ra3.2）
+   - 图纸比例（如 1/1, 1:1）
+3. 每个元素格式: {{"t":"原始文字","n":"名义值","u":"上偏差","l":"下偏差","tp":"类型","q":"数量"}}
+4. tp 取值: linear/diameter/radius/angle/chamfer/thread
+5. 偏差为空时写 ""，数量为空时写 "1"
+6. 例: {{"t":"50±0.05","n":"50","u":"+0.05","l":"-0.05","tp":"linear","q":"1"}}
+7. 例: {{"t":"4×Ø10","n":"10","u":"","l":"","tp":"diameter","q":"4"}}
+8. 只返回 JSON 数组，不要其他文字"""
+
+        resp = _call_glm4v(img_b64, prompt)
+        if not resp:
+            return []
+
+        # 解析 JSON 响应
+        result = _parse_vlm_json(resp)
+        print(f"[INFO] VLM 识别到 {len(result)} 个标注")
+        return result
+
+    except Exception as e:
+        print(f"[WARN] VLM 增强失败: {e}")
+        return []
+
+
+def _call_glm4v(img_b64: str, prompt: str) -> str:
+    """调用智谱 GLM-4V API"""
+    try:
+        import urllib.request
+        import urllib.error
+
+        data = json.dumps({
+            "model": "glm-4v",
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_b64}"}},
+                    {"type": "text", "text": prompt}
+                ]
+            }],
+            "max_tokens": 1024,
+            "temperature": 0.1,
+        }).encode()
+
+        req = urllib.request.Request(
+            f"{GLM_BASE_URL}/chat/completions",
+            data=data,
+            headers={
+                "Authorization": f"Bearer {GLM_API_KEY}",
+                "Content-Type": "application/json",
+            }
+        )
+
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            body = json.loads(resp.read().decode())
+            return body.get("choices", [{}])[0].get("message", {}).get("content", "")
+
+    except urllib.error.HTTPError as e:
+        print(f"[ERROR] GLM-4V API 错误: {e.code} {e.reason}")
+        return ""
+    except Exception as e:
+        print(f"[ERROR] GLM-4V 调用失败: {e}")
+        return ""
+
+
+def _parse_vlm_json(text: str) -> list:
+    """从 VLM 响应中提取 JSON 数组"""
+    if not text:
+        return []
+    # 去掉 markdown 代码块标记
+    text = text.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```\w*\s*", "", text)
+        text = re.sub(r"\s*```$", "", text)
+    # 找第一个 [ ... ] 段
+    match = re.search(r"\[.*\]", text, re.DOTALL)
+    if match:
+        try:
+            raw = json.loads(match.group())
+            return raw
+        except json.JSONDecodeError:
+            pass
+    print(f"[WARN] VLM 返回格式无法解析: {text[:200]}")
+    return []
+
+
+def _merge_ocr_vlm(ocr_dims: list, vlm_dims: list) -> list:
+    """
+    合并 OCR 定位结果和 VLM 语义结果。
+    OCR 提供像素坐标 (x, y)，VLM 提供准确的语义分类。
+    匹配规则：按 raw_text / nominal 模糊匹配。
+    """
+    if not vlm_dims:
+        return ocr_dims  # VLM 失败时回退到纯 OCR
+
+    # 预处理 VLM 结果
+    vlm_map = {}
+    for v in vlm_dims:
+        key = v.get("t", v.get("text", ""))
+        if not key:
+            continue
+        vlm_map[key] = v
+
+    # 合并：OCR 为准保留坐标，语义用 VLM 覆盖
+    merged = []
+    matched_keys = set()
+    for d in ocr_dims:
+        raw = d.get("raw_text", "")
+        # 精确匹配
+        if raw in vlm_map:
+            v = vlm_map[raw]
+            matched_keys.add(raw)
+            d2 = dict(d)
+            d2["type"] = v.get("tp", d.get("type", "linear"))
+            d2["nominal"] = v.get("n", d.get("nominal", ""))
+            d2["upper_tol"] = v.get("u", d.get("upper_tol", ""))
+            d2["lower_tol"] = v.get("l", d.get("lower_tol", ""))
+            d2["quantity"] = int(v.get("q", d.get("quantity", 1)) or 1)
+            d2["symbol"] = d2.get("symbol", "") or _derive_symbol(d2["type"])
+            merged.append(d2)
+        else:
+            # 模糊匹配：尝试按 nominal 值和位置匹配
+            ocr_nom = d.get("nominal", "")
+            best = None
+            for k, v in vlm_map.items():
+                if k in matched_keys:
+                    continue
+                v_nom = v.get("n", "")
+                if ocr_nom and v_nom and ocr_nom in v_nom or v_nom in ocr_nom:
+                    if not best or len(v_nom) > len(best[1].get("n", "")):
+                        best = (k, v)
+            if best:
+                k, v = best
+                matched_keys.add(k)
+                d2 = dict(d)
+                d2["type"] = v.get("tp", d.get("type", "linear"))
+                d2["nominal"] = v.get("n", d.get("nominal", ""))
+                d2["upper_tol"] = v.get("u", d.get("upper_tol", ""))
+                d2["lower_tol"] = v.get("l", d.get("lower_tol", ""))
+                d2["quantity"] = int(v.get("q", d.get("quantity", 1)) or 1)
+                d2["symbol"] = d2.get("symbol", "") or _derive_symbol(d2["type"])
+                merged.append(d2)
+            else:
+                # VLM 没匹配到 = 不是尺寸标注，直接过滤掉
+                pass
+
+    print(f"[INFO] VLM 合并: OCR {len(ocr_dims)} → 合并后 {len(merged)}")
+    return merged
+
+
+def _derive_symbol(dim_type: str) -> str:
+    """从类型推导符号"""
+    symbols = {"diameter": "Ø", "radius": "R", "angle": "°", "chamfer": "C", "thread": "M"}
+    return symbols.get(dim_type, "")
+
+
 def _ocr_image(img_path: str, render_scale: float = 1.0) -> list:
     """对图片执行 OCR，返回 dimensions 列表"""
     ocr = _get_ocr()
@@ -332,6 +532,17 @@ def extract_from_pdf(filepath: str, page_num: int = 0) -> dict:
 
     doc.close()
 
+    # ===== 第三步：VLM 增强（可选） =====
+    # OCR 已提供坐标，VLM 提供更准确的语义分类
+    if os.environ.get("BABO_RECOGNITION_MODE") == "vlm":
+        print("[INFO] 启用 VLM 增强识别...")
+        ocr_texts = [d["raw_text"] for d in dimensions] if dimensions else []
+        vlm_dims = _vlm_classify_dimensions(png_path, ocr_texts, img_width, img_height)
+        if vlm_dims:
+            dimensions = _merge_ocr_vlm(dimensions, vlm_dims)
+        else:
+            print("[WARN] VLM 无结果，保留 OCR 输出")
+
     return {
         "image_path": png_path,
         "dimensions": dimensions,
@@ -361,6 +572,17 @@ def extract_from_image(filepath: str) -> dict:
         dimensions = _ocr_image(png_path, render_scale=1.0)
     except Exception as e:
         print(f"[ERROR] OCR 失败: {e}")
+
+    # VLM 增强（可选）
+    if os.environ.get("BABO_RECOGNITION_MODE") == "vlm":
+        img_w, img_h = img.width, img.height
+        print("[INFO] 启用 VLM 增强识别...")
+        ocr_texts = [d["raw_text"] for d in dimensions] if dimensions else []
+        vlm_dims = _vlm_classify_dimensions(png_path, ocr_texts, img_w, img_h)
+        if vlm_dims:
+            dimensions = _merge_ocr_vlm(dimensions, vlm_dims)
+        else:
+            print("[WARN] VLM 无结果，保留 OCR 输出")
 
     return {
         "image_path": png_path,

@@ -203,7 +203,8 @@ def _render_dxf_with_pillow(msp, png_path: str, width: int, height: int) -> str:
 
     img.save(png_path, "PNG")
     print(f"[INFO] Pillow 回退渲染完成: {img_w}x{img_h}")
-    return png_path
+    # 返回 PNG 路径 + 世界坐标边界，供后续标注坐标变换使用
+    return png_path, (min_x, max_x, min_y, max_y, img_w, img_h)
 
 
 def extract_dimensions_from_dxf(filepath: str) -> dict:
@@ -237,6 +238,8 @@ def extract_dimensions_from_dxf(filepath: str) -> dict:
         height = 800
 
     # 优先用 matplotlib 渲染，失败则回退到 Pillow 手绘
+    # 统一收集 bounds: (min_x, max_x, min_y, max_y, png_w, png_h)
+    render_bounds = None
     rendered = False
     try:
         import matplotlib
@@ -247,17 +250,45 @@ def extract_dimensions_from_dxf(filepath: str) -> dict:
 
         fig = plt.figure(figsize=(16, 12), dpi=150)
         ax = fig.add_subplot(111)
+        ax.set_axis_off()  # 不显示坐标轴和刻度，让绘图区域占满
         ctx = RenderContext(doc)
         out = MatplotlibBackend(ax)
         Frontend(ctx, out).draw_layout(msp, finalize=True)
-        fig.savefig(png_path, dpi=150, bbox_inches="tight", pad_inches=0.1)
+
+        # 保存前获取 axes 的世界坐标范围（数据坐标系）
+        ax_xmin, ax_xmax = ax.get_xlim()
+        ax_ymin, ax_ymax = ax.get_ylim()
+
+        # 让 axes 填满整个 figure，不用 tight bbox
+        # 这样数据范围 (ax_xmin..ax_xmax, ax_ymin..ax_ymax) 精确映射到 PNG 像素范围
+        ax.set_position([0, 0, 1, 1])  # axes 占满整个 figure
+        fig.savefig(png_path, dpi=150, pad_inches=0)
         plt.close(fig)
         rendered = True
+
+        # 测量实际 PNG 像素尺寸
+        from PIL import Image as _PILImage
+        _rendered_img = _PILImage.open(png_path)
+        png_w, png_h = _rendered_img.size
+        # axes 占满整个 figure，所以数据范围直接映射到 PNG 像素范围
+        render_bounds = (ax_xmin, ax_xmax, ax_ymin, ax_ymax, png_w, png_h)
     except Exception as e:
         print(f"[WARN] matplotlib 渲染失败，回退到 Pillow: {e}")
 
     if not rendered:
-        png_path = _render_dxf_with_pillow(msp, png_path, width, height)
+        png_path, render_bounds = _render_dxf_with_pillow(msp, png_path, width, height)
+
+    # ===== 统一坐标变换：DXF 世界坐标 -> PNG 像素坐标 =====
+    # render_bounds = (min_x, max_x, min_y, max_y, png_w, png_h)
+    bx_min, bx_max, by_min, by_max, png_w, png_h = render_bounds
+    range_x = bx_max - bx_min if (bx_max - bx_min) != 0 else 1
+    range_y = by_max - by_min if (by_max - by_min) != 0 else 1
+
+    def world_to_pixel(wx, wy):
+        """DXF 世界坐标 -> PNG 像素坐标（含 Y 翻转）"""
+        px = (wx - bx_min) / range_x * png_w
+        py = (1 - (wy - by_min) / range_y) * png_h
+        return (int(px), int(py))
 
     dimensions = []
     dim_id = 0
@@ -282,6 +313,7 @@ def extract_dimensions_from_dxf(filepath: str) -> dict:
                 continue
 
             location = _get_text_location(dim, msp)
+            px, py = world_to_pixel(location[0], location[1])
 
             dim_id += 1
             dimensions.append({
@@ -293,8 +325,8 @@ def extract_dimensions_from_dxf(filepath: str) -> dict:
                 "upper_tol": parsed.get("upper_tol", ""),
                 "lower_tol": parsed.get("lower_tol", ""),
                 "quantity": parsed.get("quantity", 1),
-                "x": location[0],
-                "y": location[1],
+                "x": px,
+                "y": py,
                 "note": "",
             })
         except Exception as e:
@@ -328,6 +360,7 @@ def extract_dimensions_from_dxf(filepath: str) -> dict:
                 continue
 
             location = _get_text_location(entity, msp)
+            px, py = world_to_pixel(location[0], location[1])
 
             dim_id += 1
             dimensions.append({
@@ -339,8 +372,8 @@ def extract_dimensions_from_dxf(filepath: str) -> dict:
                 "upper_tol": parsed.get("upper_tol", ""),
                 "lower_tol": parsed.get("lower_tol", ""),
                 "quantity": parsed.get("quantity", 1),
-                "x": location[0],
-                "y": location[1],
+                "x": px,
+                "y": py,
                 "note": "",
             })
         except Exception as e:
@@ -350,7 +383,7 @@ def extract_dimensions_from_dxf(filepath: str) -> dict:
     return {
         "image_path": png_path,
         "dimensions": dimensions,
-        "width": width,
-        "height": height,
+        "width": png_w,
+        "height": png_h,
         "source_format": "dxf",
     }
