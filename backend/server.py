@@ -24,6 +24,12 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
+# PyInstaller 打包后的资源路径
+def _app_path(relative):
+    if hasattr(sys, '_MEIPASS'):
+        return Path(sys._MEIPASS) / relative
+    return (Path(__file__).parent.parent / relative).resolve()
+
 # 确保能 import 同级模块
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -57,11 +63,15 @@ async def _run_extraction_subprocess(script_path: str, filepath: str, timeout: i
     """
     actual_timeout = timeout or OCR_TIMEOUT
     # 打包后用 sys.executable，开发时用 venv python
-    venv_python = os.environ.get("BABO_PYTHON", str(Path(__file__).parent.parent / "venv" / "bin" / "python"))
+    venv_python = os.environ.get("BABO_PYTHON", sys.executable)
 
     # 子进程环境变量
-    print(f'[DEBUG] recog_mode={recog_mode}', file=sys.stderr)
-    sub_env = {**os.environ, "BABO_RECOGNITION_MODE": recog_mode}
+        is_bundled = hasattr(sys, '_MEIPASS')
+    sub_env = {**os.environ,
+               "BABO_RECOGNITION_MODE": recog_mode,
+               "GLM_API_KEY": os.environ.get("GLM_API_KEY", ""),
+               "GLM_BASE_URL": os.environ.get("GLM_BASE_URL", "https://open.bigmodel.cn/api/paas/v4"),
+               }
 
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -361,7 +371,7 @@ except Exception as e:
 
 
 # 静态文件服务前端
-frontend_dir = Path(__file__).parent.parent / "frontend"
+frontend_dir = _app_path("frontend")
 if frontend_dir.exists():
     app.mount("/", StaticFiles(directory=str(frontend_dir), html=True), name="frontend")
 
