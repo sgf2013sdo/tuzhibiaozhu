@@ -66,12 +66,16 @@ async def _run_extraction_subprocess(script_path: str, filepath: str, timeout: i
     venv_python = os.environ.get("BABO_PYTHON", sys.executable)
 
     # 子进程环境变量
-        is_bundled = hasattr(sys, '_MEIPASS')
+    is_bundled = hasattr(sys, '_MEIPASS')
     sub_env = {**os.environ,
                "BABO_RECOGNITION_MODE": recog_mode,
                "GLM_API_KEY": os.environ.get("GLM_API_KEY", ""),
                "GLM_BASE_URL": os.environ.get("GLM_BASE_URL", "https://open.bigmodel.cn/api/paas/v4"),
                }
+
+    # EXE 模式下子进程需要传 _MEIPASS 路径
+    if is_bundled:
+        sub_env["_MEIPASS"] = sys._MEIPASS
 
     try:
         proc = await asyncio.create_subprocess_exec(
