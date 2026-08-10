@@ -21,8 +21,17 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pyinstaller pywebview
+          pip install fastapi uvicorn python-multipart pydantic pyfirmata pymupdf Pillow openpyxl ezdxf rapidocr_onnxruntime onnxruntime pywebview pyinstaller
+          pip list | grep -E "rapidocr|onnx|pyinstaller|pywebview"
+
+      - name: Verify imports
+        run: |
+          python -c "import rapidocr_onnxruntime; print('rapidocr OK')"
+          python -c "import onnxruntime; print('onnx OK')"
+          python -c "import pywebview; print('pywebview OK')"
+          python -c "import uvicorn; print('uvicorn OK')"
+          python -c "import fitz; print('fitz OK')"
+          python -c "import ezdxf; print('ezdxf OK')"
 
       - name: Build EXE
         run: |
@@ -45,6 +54,14 @@ jobs:
             --hidden-import dxf_handler `
             --hidden-import pdf_handler `
             --hidden-import exporter `
+            --hidden-import rapidocr_onnxruntime `
+            --hidden-import rapidocr_onnxruntime.main `
+            --hidden-import onnxruntime `
+            --hidden-import onnxruntime.capi `
+            --hidden-import fitz `
+            --hidden-import ezdxf `
+            --hidden-import PIL `
+            --hidden-import PIL.Image `
             --collect-all rapidocr_onnxruntime `
             --collect-all onnxruntime `
             desktop\main.py
