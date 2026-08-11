@@ -72,8 +72,9 @@ def start_server(port, stop_event):
     else:
         os.environ['BABO_PYTHON'] = str(app_root / "venv" / "bin" / "python")
 
-    os.environ.setdefault('GLM_API_KEY', '428d0fc749c44f5bacdd04db164ca026.9ySXXn37Xwt3Vrx6')
-    os.environ.setdefault('GLM_BASE_URL', 'https://open.bigmodel.cn/api/paas/v4')
+    # 完全本地化：不设置 GLM API key，禁用任何云端调用
+    # （pdf_handler 检测到无 key 会自动跳过 VLM，只用本地 RapidOCR）
+    os.environ.pop('GLM_API_KEY', None)
     os.environ.setdefault('ORT_LOGGING_LEVEL', '3')
 
     try:

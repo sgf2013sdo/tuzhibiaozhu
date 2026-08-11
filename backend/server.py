@@ -107,8 +107,6 @@ async def _run_extraction_subprocess(script_path: str, filepath: str, timeout: i
 
     sub_env = {**os.environ,
                "BABO_RECOGNITION_MODE": recog_mode,
-               "GLM_API_KEY": os.environ.get("GLM_API_KEY", ""),
-               "GLM_BASE_URL": os.environ.get("GLM_BASE_URL", "https://open.bigmodel.cn/api/paas/v4"),
                }
 
     try:
