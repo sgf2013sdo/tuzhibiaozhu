@@ -189,7 +189,7 @@ def _filter_and_parse_ocr_results(ocr_results: list, scale_factor: float = 1.0) 
     """
     dimensions = []
     dim_id = 0
-    seen_texts = set()
+    seen_texts = []  # 存 (text, cx, cy)，按空间位置去重
 
     for item in ocr_results:
         if not item or len(item) < 3:
@@ -202,15 +202,9 @@ def _filter_and_parse_ocr_results(ocr_results: list, scale_factor: float = 1.0) 
         if not _is_dimension_like(text):
             continue
 
-        # 去重
-        if text in seen_texts:
-            continue
-
         parsed = _parse_dim_text(text)
         if not parsed.get("nominal") and not parsed.get("raw"):
             continue
-
-        seen_texts.add(text)
 
         # 计算中心坐标
         cx, cy = 0, 0
@@ -222,6 +216,20 @@ def _filter_and_parse_ocr_results(ocr_results: list, scale_factor: float = 1.0) 
                 cy = int((min(ys) + max(ys)) / 2 * scale_factor)
         except Exception:
             cx, cy = 0, 0
+
+        # 空间去重：相同文本且位置相近(50px内)才算重复，不同位置保留
+        # 工程图纸同一数值可能出现在多处（对称孔、多处同尺寸）
+        is_dup = False
+        for (s_text, s_x, s_y) in seen_texts:
+            if s_text == text:
+                dist = ((s_x - cx) ** 2 + (s_y - cy) ** 2) ** 0.5
+                if dist < 50:
+                    is_dup = True
+                    break
+        if is_dup:
+            continue
+
+        seen_texts.append((text, cx, cy))
 
         dim_id += 1
         dimensions.append({

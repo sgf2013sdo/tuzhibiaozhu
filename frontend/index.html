@@ -597,48 +597,67 @@ function showWorkspace() {
   img.onload = () => {
     state.imgNaturalWidth = img.naturalWidth;
     state.imgNaturalHeight = img.naturalHeight;
-
-    // 限制最大显示尺寸
-    const maxW = Math.min(window.innerWidth - 420, img.naturalWidth);
-    const scale = maxW / img.naturalWidth;
-    state.canvasScale = scale;
-
-    const dispW = img.naturalWidth * scale;
-    const dispH = img.naturalHeight * scale;
-
-    canvas.style.width = dispW + 'px';
-    canvas.style.height = dispH + 'px';
-    canvas.style.position = 'relative';
-
-    // 用 canvas 绘制
-    const c = document.createElement('canvas');
-    c.width = dispW;
-    c.height = dispH;
-    c.style.position = 'absolute';
-    c.style.top = '0';
-    c.style.left = '0';
-    const ctx = c.getContext('2d');
-    ctx.drawImage(img, 0, 0, dispW, dispH);
-    canvas.appendChild(c);
-
-    // 气泡层（绝对定位的 div）
-    const bubbleLayer = document.createElement('div');
-    bubbleLayer.id = 'bubbleLayer';
-    bubbleLayer.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;';
-    canvas.appendChild(bubbleLayer);
-
-    // 交互层（捕获鼠标事件）
-    const interactionLayer = document.createElement('div');
-    interactionLayer.id = 'interactionLayer';
-    interactionLayer.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:auto;';
-    canvas.appendChild(interactionLayer);
-
-    setupCanvasInteraction(interactionLayer);
-    renderBubbles();
-    renderList();
-    updateStatus();
+    renderCanvas(canvas, img);
+    // 监听窗口大小变化，重新缩放画布（最大化/拖动窗口时生效）
+    window.addEventListener('resize', () => {
+      if (state.imgNaturalWidth > 0) {
+        renderCanvas(canvas, img);
+      }
+    });
   };
   img.src = state.imageUrl;
+}
+
+// ===== 渲染画布（带自适应缩放） =====
+function renderCanvas(canvas, img) {
+  canvas.innerHTML = '';
+  const naturalW = state.imgNaturalWidth;
+  const naturalH = state.imgNaturalHeight;
+
+  // 根据窗口大小自适应：宽度撑满可用区域，高度超限则按高度缩放
+  const availableW = window.innerWidth - 420; // 侧边栏宽度
+  const availableH = window.innerHeight - 150; // 工具栏+状态栏
+  const scaleW = availableW / naturalW;
+  const scaleH = availableH / naturalH;
+  // 取较小缩放，保证完整显示；但不超过 1（不放大糊图）
+  let scale = Math.min(scaleW, scaleH, 1);
+  if (scale <= 0) scale = 1;
+  state.canvasScale = scale;
+
+  const dispW = naturalW * scale;
+  const dispH = naturalH * scale;
+
+  canvas.style.width = dispW + 'px';
+  canvas.style.height = dispH + 'px';
+  canvas.style.position = 'relative';
+
+  // 用 canvas 绘制
+  const c = document.createElement('canvas');
+  c.width = dispW;
+  c.height = dispH;
+  c.style.position = 'absolute';
+  c.style.top = '0';
+  c.style.left = '0';
+  const ctx = c.getContext('2d');
+  ctx.drawImage(img, 0, 0, dispW, dispH);
+  canvas.appendChild(c);
+
+  // 气泡层（绝对定位的 div）
+  const bubbleLayer = document.createElement('div');
+  bubbleLayer.id = 'bubbleLayer';
+  bubbleLayer.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;';
+  canvas.appendChild(bubbleLayer);
+
+  // 交互层（捕获鼠标事件）
+  const interactionLayer = document.createElement('div');
+  interactionLayer.id = 'interactionLayer';
+  interactionLayer.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:auto;';
+  canvas.appendChild(interactionLayer);
+
+  setupCanvasInteraction(interactionLayer);
+  renderBubbles();
+  renderList();
+  updateStatus();
 }
 
 // ===== 气泡避让偏移计算 =====
