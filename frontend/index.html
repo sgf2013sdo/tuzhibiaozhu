@@ -398,10 +398,11 @@ let state = {
 const TYPE_COLORS = {
   linear: '#4CAF50', diameter: '#2196F3', radius: '#FF9800',
   angle: '#9C27B0', chamfer: '#607D8B', thread: '#F44336', text: '#795548',
+  gdt: '#00BCD4',
 };
 const TYPE_LABELS = {
   linear:'线性', diameter:'直径', radius:'半径', angle:'角度',
-  chamfer:'倒角', thread:'螺纹', text:'文字',
+  chamfer:'倒角', thread:'螺纹', text:'文字', gdt:'形位公差',
 };
 
 // ===== AI 视觉（精准模式）配置 =====
@@ -1056,7 +1057,7 @@ function renderList() {
            onclick="selectDim(${dim.id})">
         <div class="dim-num" style="background:${color}">${dim.id}</div>
         <div class="dim-info">
-          <div class="dim-text">${dim.symbol}${dim.nominal} ${tol}</div>
+          <div class="dim-text">${dim.symbol}${dim.nominal} ${dim.datums ? '[' + dim.datums + ']' : ''} ${tol}</div>
           <div class="dim-meta">${label}${tolText} | ${dim.raw_text || '(空)'}</div>
         </div>
         <div class="dim-actions">

@@ -46,10 +46,15 @@ def _parse_dim_text(text: str) -> dict:
     # 清理 OCR 常见误读
     # Ø 被读成 0 开头的数字 -> 如 060 可能是 Ø60, 0160 可能是 Ø160
     # 如果数字以 0 开头且后面有2+位数字，可能是 Ø 被读成了 0
-    text = text.replace("⊙", "Ø").replace("◎", "Ø")
+    text = text.replace("⊙", "◎").replace("⌀", "Ø")  # ⊙是同轴度符号, ⌀是直径
+    # OCR 常把 Ø 读成 @（如 @103±0.10）
+    text = re.sub(r'@(?=\s*\d)', 'Ø', text)
     # 修复 OCR 把 Ø 读成 0 的情况：0后面紧跟数字且整体看起来像直径
     # 例如 "060" -> "Ø60", "0160" -> "Ø160", "010" -> "Ø10"
-    text = re.sub(r'^0(\d{1,3})\b', r'Ø\1', text)
+    # 排除小数（0.05 / 00.05 是公差值，不是 Ø 误读）
+    # 00.05 = 符号⌁读成0 + 值0.05，先删一个前导0，再判断直径
+    text = re.sub(r'^0(?=0\.\d)', '', text)  # 00.05 -> 0.05；0.05 不受影响
+    text = re.sub(r'^0(?!\.)(\d{1,3})\b', r'Ø\1', text)
     # 数量前缀中的 0 也修复: 4×060 -> 4×Ø60
     text = re.sub(r'(\d+\s*[×xX*]\s*)0(\d{1,3})\b', r'\1Ø\2', text)
     # 修复 ± 被读成 + 或其他符号
@@ -63,7 +68,77 @@ def _parse_dim_text(text: str) -> dict:
     text = re.sub(r'^[^\dØ⌀ΦφRMC°%%]*([Ø⌀Φφ])', r'\1', text)
     # 修复 R 前面多了多余字符的情况（确保半径 R 不被直径修复正则干扰）
     text = re.sub(r'^[^Ø⌀ΦφRMC°%%\d\s]+(R\s*\d)', r'\1', text)
+    # 压缩数字中间的空格（OCR 常把 "92. 20" 识别成 "92. 20"）
+    text = re.sub(r'(\d)\s+(\d)', r'\1\2', text)
     result = {"raw": text}
+
+    # 形位公差（GD&T）：符号 + 公差值 + 基准字母
+    # 例: ⌁0.05 A, ⊥0.1 A B, ∥0.02 A, ⌒0.01, ◎0.05 A
+    # OCR 常把符号读成: //, ||, 11, ⌒->^, ⊥->L 等
+    # 注意: ◎ 是同轴度GD&T符号，不是直径，必须在这里先匹配
+    gdt_symbols = r'[⌁⊥∥⌒◎○⌭⌖⏣⌓∠⏥◇◆⌯]'
+    gdt_text = text.strip()
+    # 标准化 OCR 误读的符号
+    gdt_text = re.sub(r'^//+', '∥', gdt_text)   # // -> 平行度
+    gdt_text = re.sub(r'^\|\|', '∥', gdt_text)
+    gdt_text = re.sub(r'^11(?=\s*\d)', '⌁', gdt_text)  # OCR把⌁读成11
+    gdt_text = re.sub(r'^L(?=\s*0\.\d)', '⊥', gdt_text)  # OCR把⊥读成L
+    # 注意: 不要在这里把 ^0 当符号替换（会把 0.05 数值吃掉变成 ⌁.05），
+    # 符号完全丢失的情况由下方 fallback（值+基准字母）兜底
+    # 匹配: 符号 + 公差值 + (可选)1-3个基准字母
+    gdt_match = re.match(
+        r'^(%s)\s*([<>]?\s*[øØ]?\s*\d+\.?\d*)\s*([A-HJ-Z](\s*[A-HJ-Z]){0,2})?$' % gdt_symbols,
+        gdt_text
+    )
+    if gdt_match:
+        result["type"] = "gdt"
+        result["symbol"] = gdt_match.group(1)
+        result["nominal"] = gdt_match.group(2).replace("Ø", "").replace("ø", "").replace(" ", "").lstrip("<>")
+        result["datums"] = (gdt_match.group(3) or "").replace(" ", "")
+        result["upper_tol"] = ""
+        result["lower_tol"] = ""
+        result["quantity"] = 1
+        return result
+
+    # OCR 符号丢失的 GD&T 兜底：rapidocr 字符集没有 GD&T 符号（⌁⊥∥⌒◎），
+    # 符号被丢弃后只剩 "值 + 基准字母"（如 0.05 A / 0.1 A B），或符号被误读
+    # 成 1/I1/0（如 ⊥0.1 -> 10.1, ∥0.02 -> I10.02, ⌁0.05 -> 0.05 A）
+    gdt_text2 = gdt_text
+    # 误读归一：I1 开头 -> 平行度符号被读成 I1
+    gdt_text2 = re.sub(r'^I1(?=\s*\d)', '∥', gdt_text2)
+    # ⊥0.1 被读成 10.1（仅当 1 后面是 0.x 小数；12.5 这类真实尺寸不能动）
+    gdt_text2 = re.sub(r'^1(?=\s*0\.\d)', '⊥', gdt_text2)
+    # 纯符号丢失：^值 + 基准字母 且值为典型公差量级(<=1) -> 位置度(最常见, 标记symbol为空)
+    gdt_fallback = re.match(
+        r'^(\d+\.?\d*)\s+([A-HJ-Z](\s*[A-HJ-Z]){0,2})$',
+        gdt_text2
+    )
+    if gdt_fallback:
+        val = float(gdt_fallback.group(1))
+        # 典型 GD&T 公差值 ≤ 1mm；普通线性尺寸极少单独写 0.0X + 基准字母
+        if val <= 1.0:
+            result["type"] = "gdt"
+            result["symbol"] = ""
+            result["nominal"] = gdt_fallback.group(1)
+            result["datums"] = gdt_fallback.group(2).replace(" ", "")
+            result["upper_tol"] = ""
+            result["lower_tol"] = ""
+            result["quantity"] = 1
+            return result
+    # 带符号误读的：重新用 GD&T 符号匹配（gdt_text2 已归一化）
+    gdt_match2 = re.match(
+        r'^(%s)\s*([<>]?\s*[øØ]?\s*\d+\.?\d*)\s*([A-HJ-Z](\s*[A-HJ-Z]){0,2})?$' % gdt_symbols,
+        gdt_text2
+    )
+    if gdt_match2:
+        result["type"] = "gdt"
+        result["symbol"] = gdt_match2.group(1)
+        result["nominal"] = gdt_match2.group(2).replace("Ø", "").replace("ø", "").replace(" ", "").lstrip("<>")
+        result["datums"] = (gdt_match2.group(3) or "").replace(" ", "")
+        result["upper_tol"] = ""
+        result["lower_tol"] = ""
+        result["quantity"] = 1
+        return result
 
     # 直径
     if any(c in text for c in ["Ø", "⌀", "Φ", "φ", "%%C", "%%c"]):
@@ -95,8 +170,8 @@ def _parse_dim_text(text: str) -> dict:
     if result["type"] == "thread":
         clean = re.sub(r"^M\s*", "", clean)
 
-    # 数量前缀
-    qty_match = re.match(r"(\d+)\s*[×xX*]\s*(.+)", clean)
+    # 数量前缀（支持 4-R7.50, 4×Ø10, 8-R4 等）
+    qty_match = re.match(r"(\d+)\s*[×xX*\-]\s*(.+)", clean)
     if qty_match:
         result["quantity"] = int(qty_match.group(1))
         clean = qty_match.group(2)
@@ -181,15 +256,21 @@ def _is_dimension_like(text: str) -> bool:
     return True
 
 
-def _filter_and_parse_ocr_results(ocr_results: list, scale_factor: float = 1.0) -> list:
+def _filter_and_parse_ocr_results(ocr_results: list, scale_factor: float = 1.0, img_w: int = 0, img_h: int = 0) -> list:
     """
     从 OCR 结果中筛选尺寸标注
     ocr_results: [[bbox, text, confidence], ...]
+    img_w/img_h: 图片原始尺寸（用于过滤边缘位置标记框）
     返回: [dimension_dict, ...]
     """
     dimensions = []
     dim_id = 0
     seen_texts = []  # 存 (text, cx, cy)，按空间位置去重
+
+    # 边缘位置标记过滤：图纸外圈的位置标记框数字（1,2,3... A,B,C...）
+    # 边缘宽度 = 图片宽高的 6%（位置标记通常在边框外侧的窄条内）
+    edge_w = img_w * 0.06 if img_w > 0 else 0
+    edge_h = img_h * 0.06 if img_h > 0 else 0
 
     for item in ocr_results:
         if not item or len(item) < 3:
@@ -217,6 +298,13 @@ def _filter_and_parse_ocr_results(ocr_results: list, scale_factor: float = 1.0) 
         except Exception:
             cx, cy = 0, 0
 
+        # 边缘位置标记过滤：图纸最外圈的独立短文本（位置标记框 1,2,3... A,B,C...）
+        if edge_w > 0 and edge_h > 0:
+            on_edge = (cx < edge_w or cx > img_w - edge_w or
+                       cy < edge_h or cy > img_h - edge_h)
+            if on_edge and len(text) <= 3 and re.match(r'^[\dA-Za-z]+$', text):
+                continue  # 位置标记，跳过
+
         # 空间去重：相同文本且位置相近(50px内)才算重复，不同位置保留
         # 工程图纸同一数值可能出现在多处（对称孔、多处同尺寸）
         is_dup = False
@@ -238,6 +326,7 @@ def _filter_and_parse_ocr_results(ocr_results: list, scale_factor: float = 1.0) 
             "type": parsed.get("type", "text"),
             "symbol": parsed.get("symbol", ""),
             "nominal": parsed.get("nominal", ""),
+            "datums": parsed.get("datums", ""),
             "upper_tol": parsed.get("upper_tol", ""),
             "lower_tol": parsed.get("lower_tol", ""),
             "quantity": parsed.get("quantity", 1),
@@ -247,6 +336,45 @@ def _filter_and_parse_ocr_results(ocr_results: list, scale_factor: float = 1.0) 
         })
 
     return dimensions
+
+
+def _merge_dimension_sets(text_dims: list, ocr_dims: list) -> list:
+    """
+    合并文本层提取和 OCR 提取的标注结果。
+    - 按 (raw_text 规范化, 位置距离) 去重
+    - 位置相近(<60px)且文本相似视为同一标注，保留文本层的（坐标更准）
+    """
+    merged = list(text_dims)
+
+    def norm(t):
+        # 规范化文本用于比对：去空格、统一符号
+        t = t.replace(" ", "").replace("@", "Ø").replace("0", "Ø") if False else t.replace(" ", "")
+        return t
+
+    for ocr_d in ocr_dims:
+        ocr_text = ocr_d.get("raw_text", "")
+        ocr_x, ocr_y = ocr_d.get("x", 0), ocr_d.get("y", 0)
+        ocr_norm = norm(ocr_text)
+
+        dup = False
+        for td in merged:
+            td_text = td.get("raw_text", "")
+            td_x, td_y = td.get("x", 0), td.get("y", 0)
+            # 文本完全相同 或 位置相近且名义值相同
+            if td_text == ocr_text:
+                dup = True
+                break
+            dist = ((td_x - ocr_x) ** 2 + (td_y - ocr_y) ** 2) ** 0.5
+            if dist < 60 and td.get("nominal") == ocr_d.get("nominal") and td.get("nominal"):
+                dup = True
+                break
+        if not dup:
+            merged.append(ocr_d)
+
+    # 重新编号
+    for i, d in enumerate(merged):
+        d["id"] = i + 1
+    return merged
 
 
 def _vlm_classify_dimensions(png_path: str, ocr_texts: list, image_w: int, image_h: int) -> list:
@@ -473,7 +601,8 @@ def _ocr_image(img_path: str, render_scale: float = 1.0) -> list:
     if not result:
         return []
 
-    return _filter_and_parse_ocr_results(result, scale_factor=scale_factor)
+    return _filter_and_parse_ocr_results(result, scale_factor=scale_factor,
+                                          img_w=orig_w, img_h=orig_h)
 
 
 def extract_from_pdf(filepath: str, page_num: int = 0) -> dict:
@@ -540,13 +669,16 @@ def extract_from_pdf(filepath: str, page_num: int = 0) -> dict:
     except Exception as e:
         print(f"[WARN] PDF文本层提取失败: {e}")
 
-    # ===== 第二步：如果文本层没提取到，用 OCR =====
-    if not dimensions:
-        print("[INFO] PDF文本层无尺寸标注，启用 OCR 识别...")
-        try:
-            dimensions = _ocr_image(png_path, render_scale=1.0)
-        except Exception as e:
-            print(f"[ERROR] OCR 失败: {e}")
+    # ===== 第二步：始终用 OCR 补充（文本层经常残缺，OCR 能识别更多） =====
+    try:
+        print("[INFO] 启用 OCR 补充识别...")
+        ocr_dims = _ocr_image(png_path, render_scale=1.0)
+        # 合并：OCR 结果与文本层结果去重合并（按文本+位置）
+        if ocr_dims:
+            dimensions = _merge_dimension_sets(dimensions, ocr_dims)
+            print(f"[INFO] 合并后共 {len(dimensions)} 个标注 (文本层 {len(dimensions) - len(ocr_dims) + len([d for d in ocr_dims if d not in dimensions])} + OCR)")
+    except Exception as e:
+        print(f"[ERROR] OCR 补充识别失败: {e}")
 
     doc.close()
 
