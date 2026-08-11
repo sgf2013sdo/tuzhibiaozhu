@@ -57,25 +57,59 @@ OCR_TIMEOUT = 180
 
 async def _run_extraction_subprocess(script_path: str, filepath: str, timeout: int = None, recog_mode: str = "ocr"):
     """
-    在独立子进程中运行 OCR/解析任务，超时后可以真正 kill 进程。
-    避免线程池模型中线程卡死无法释放的问题。
+    运行 OCR/解析任务。
+    - 开发模式（Linux/venv）: 独立子进程，超时可 kill
+    - EXE 打包模式: 直接进程内调用（EXE 不是 Python 解释器，无法用 -c 子进程）
     recog_mode: "ocr" 或 "vlm"，控制识别精度
     """
     actual_timeout = timeout or OCR_TIMEOUT
-    # 打包后用 sys.executable，开发时用 venv python
-    venv_python = os.environ.get("BABO_PYTHON", sys.executable)
 
-    # 子进程环境变量
-    is_bundled = hasattr(sys, '_MEIPASS')
+    # 设置识别模式环境变量（pdf_handler 内读取）
+    old_mode = os.environ.get("BABO_RECOGNITION_MODE")
+    os.environ["BABO_RECOGNITION_MODE"] = recog_mode
+
+    # EXE 模式：直接调用（无法 spawn 子进程，因为 EXE 不是 python 解释器）
+    if hasattr(sys, '_MEIPASS'):
+        try:
+            import asyncio as _asyncio
+            loop = _asyncio.get_event_loop()
+            if script_path == 'pdf_handler':
+                from pdf_handler import extract_from_pdf
+                func = lambda: extract_from_pdf(filepath)
+            elif script_path == 'pdf_handler_img':
+                from pdf_handler import extract_from_image
+                func = lambda: extract_from_image(filepath)
+            else:
+                from dxf_handler import extract_dimensions_from_dxf
+                func = lambda: extract_dimensions_from_dxf(filepath)
+
+            try:
+                result = await _asyncio.wait_for(
+                    _asyncio.to_thread(func), timeout=actual_timeout)
+                return result
+            except _asyncio.TimeoutError:
+                print(f"[WARN] EXE 内 OCR 超时 ({actual_timeout}s)")
+                return _generate_fallback_result(filepath, script_path)
+        except HTTPException:
+            raise
+        except Exception as e:
+            print(f"[ERROR] EXE 内 OCR 失败: {e}")
+            import traceback; traceback.print_exc()
+            return _generate_fallback_result(filepath, script_path)
+        finally:
+            if old_mode is None:
+                os.environ.pop("BABO_RECOGNITION_MODE", None)
+            else:
+                os.environ["BABO_RECOGNITION_MODE"] = old_mode
+
+    # ===== 开发模式：子进程 =====
+    venv_python = os.environ.get("BABO_PYTHON", str(Path(__file__).parent.parent / "venv" / "bin" / "python"))
+
     sub_env = {**os.environ,
                "BABO_RECOGNITION_MODE": recog_mode,
                "GLM_API_KEY": os.environ.get("GLM_API_KEY", ""),
                "GLM_BASE_URL": os.environ.get("GLM_BASE_URL", "https://open.bigmodel.cn/api/paas/v4"),
                }
-
-    # EXE 模式下子进程需要传 _MEIPASS 路径
-    if is_bundled:
-        sub_env["_MEIPASS"] = sys._MEIPASS
 
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -319,8 +353,32 @@ async def export_image_api(req: ExportImageRequest):
     proj = PROJECTS.get(req.project_id)
     if not proj:
         raise HTTPException(404, "项目不存在")
-    # 导出图片用子进程运行，避免大图阻塞或 OOM 崩溃主进程
+    # 导出图片：EXE 模式直接调用，开发模式用子进程
     import tempfile, json as _json
+    from exporter import export_ballooned_image as _export_fn
+
+    if hasattr(sys, '_MEIPASS'):
+        # EXE 模式：直接进程内调用
+        try:
+            import asyncio as _asyncio
+            data = await _asyncio.wait_for(
+                _asyncio.to_thread(
+                    _export_fn,
+                    proj["image_path"], proj["dimensions"],
+                    req.bubble_scale, req.bubble_shape, req.colors,
+                ),
+                timeout=120,
+            )
+        except _asyncio.TimeoutError:
+            raise HTTPException(500, "导出图片超时，请减少标注数量后重试")
+        except Exception as e:
+            raise HTTPException(500, f"导出图片失败: {str(e)}")
+        return Response(
+            content=data,
+            media_type="image/png",
+            headers={"Content-Disposition": "attachment; filename=ballooned_drawing.png"},
+        )
+
     venv_python = str(Path(__file__).parent.parent / "venv" / "bin" / "python")
     tmpdir = tempfile.mkdtemp(prefix="babo_export_")
     output_png = str(Path(tmpdir) / "output.png")
