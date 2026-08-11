@@ -53,6 +53,7 @@ jobs:
             --collect-all openpyxl `
             --collect-all multipart `
             --collect-all anyio `
+            --hidden-import fitz `
             --hidden-import server `
             --hidden-import dxf_handler `
             --hidden-import pdf_handler `
