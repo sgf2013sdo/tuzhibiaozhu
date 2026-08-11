@@ -19,9 +19,15 @@ from PIL import Image
 # OCR 引擎懒加载（首次调用才初始化，避免启动慢）
 _ocr_engine = None
 
-# GLM-4V API 配置
-GLM_API_KEY = os.environ.get("GLM_API_KEY", "")
-GLM_BASE_URL = os.environ.get("GLM_BASE_URL", "https://open.bigmodel.cn/api/paas/v4")
+# GLM-4V API 配置（运行时从环境变量读取，用户可在前端配置）
+def _glm_api_key():
+    return os.environ.get("GLM_API_KEY", "")
+
+def _glm_base_url():
+    return os.environ.get("GLM_BASE_URL", "https://open.bigmodel.cn/api/paas/v4")
+
+def _glm_model():
+    return os.environ.get("GLM_MODEL", "glm-4v")
 
 
 def _get_ocr():
@@ -240,7 +246,7 @@ def _vlm_classify_dimensions(png_path: str, ocr_texts: list, image_w: int, image
     VLM 增强：将图纸图片发给 GLM-4V，识别哪些文字是尺寸标注，返回结构化数据。
     返回: [{text, type, nominal, upper_tol, lower_tol, quantity, symbol}, ...]
     """
-    if not GLM_API_KEY:
+    if not _glm_api_key():
         print("[INFO] GLM_API_KEY 未配置，跳过 VLM 增强")
         return []
 
@@ -298,13 +304,17 @@ OCR 已识别到以下文字（仅供参考，可能含非尺寸内容）:
 
 
 def _call_glm4v(img_b64: str, prompt: str) -> str:
-    """调用智谱 GLM-4V API"""
+    """调用视觉模型 API（OpenAI 兼容格式，可指向任意用户配置的服务）"""
     try:
         import urllib.request
         import urllib.error
 
+        api_key = _glm_api_key()
+        base_url = _glm_base_url().rstrip("/")
+        model = _glm_model()
+
         data = json.dumps({
-            "model": "glm-4v",
+            "model": model,
             "messages": [{
                 "role": "user",
                 "content": [
@@ -317,10 +327,10 @@ def _call_glm4v(img_b64: str, prompt: str) -> str:
         }).encode()
 
         req = urllib.request.Request(
-            f"{GLM_BASE_URL}/chat/completions",
+            f"{base_url}/chat/completions",
             data=data,
             headers={
-                "Authorization": f"Bearer {GLM_API_KEY}",
+                "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
             }
         )
@@ -330,10 +340,10 @@ def _call_glm4v(img_b64: str, prompt: str) -> str:
             return body.get("choices", [{}])[0].get("message", {}).get("content", "")
 
     except urllib.error.HTTPError as e:
-        print(f"[ERROR] GLM-4V API 错误: {e.code} {e.reason}")
+        print(f"[ERROR] 视觉API错误: {e.code} {e.reason}")
         return ""
     except Exception as e:
-        print(f"[ERROR] GLM-4V 调用失败: {e}")
+        print(f"[ERROR] 视觉API调用失败: {e}")
         return ""
 
 

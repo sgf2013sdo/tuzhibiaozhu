@@ -55,6 +55,16 @@ PROJECTS = {}
 OCR_TIMEOUT = 180
 
 
+def _write_error_log(err_msg: str):
+    """把错误信息写入用户目录的日志文件，方便排查"""
+    try:
+        log_dir = Path(os.environ.get("BABO_UPLOAD_DIR", str(Path.home())))
+        log_path = log_dir / "babo_error.log"
+        log_path.write_text(err_msg, encoding="utf-8")
+    except Exception:
+        pass
+
+
 async def _run_extraction_subprocess(script_path: str, filepath: str, timeout: int = None, recog_mode: str = "ocr"):
     """
     运行 OCR/解析任务。
@@ -72,7 +82,6 @@ async def _run_extraction_subprocess(script_path: str, filepath: str, timeout: i
     if hasattr(sys, '_MEIPASS'):
         try:
             import asyncio as _asyncio
-            loop = _asyncio.get_event_loop()
             if script_path == 'pdf_handler':
                 from pdf_handler import extract_from_pdf
                 func = lambda: extract_from_pdf(filepath)
@@ -93,9 +102,13 @@ async def _run_extraction_subprocess(script_path: str, filepath: str, timeout: i
         except HTTPException:
             raise
         except Exception as e:
-            print(f"[ERROR] EXE 内 OCR 失败: {e}")
-            import traceback; traceback.print_exc()
-            return _generate_fallback_result(filepath, script_path)
+            import traceback
+            err = traceback.format_exc()
+            print(f"[ERROR] EXE 内 OCR 失败:\n{err}")
+            _write_error_log(err)
+            result = _generate_fallback_result(filepath, script_path)
+            result["error"] = f"OCR 识别失败: {e}"
+            return result
         finally:
             if old_mode is None:
                 os.environ.pop("BABO_RECOGNITION_MODE", None)
@@ -227,11 +240,24 @@ async def health():
 
 
 @app.post("/api/upload")
-async def upload_file(file: UploadFile = File(...), mode: str = "ocr"):
+async def upload_file(file: UploadFile = File(...), mode: str = "ocr",
+                      vlm_base_url: str = "", vlm_api_key: str = "", vlm_model: str = ""):
     """上传文件，自动识别格式并提取尺寸标注。
-    mode: "ocr" (快速本地) 或 "vlm" (AI 精准)"""
+    mode: "ocr" (快速本地) 或 "vlm" (AI 精准)
+    vlm_*: 精准模式下用户自填的 AI 服务配置（不落盘，仅本次请求）"""
     if not file.filename:
         raise HTTPException(400, "文件名不能为空")
+
+    # 精准模式：把用户配置传给提取流程（仅内存，不写文件）
+    vlm_cfg = {}
+    if mode == "vlm" and vlm_api_key:
+        vlm_cfg = {"base_url": vlm_base_url, "api_key": vlm_api_key, "model": vlm_model}
+        # 写环境变量供 pdf_handler 读取（进程内共享）
+        os.environ["GLM_API_KEY"] = vlm_api_key
+        if vlm_base_url:
+            os.environ["GLM_BASE_URL"] = vlm_base_url
+        if vlm_model:
+            os.environ["GLM_MODEL"] = vlm_model
 
     ext = Path(file.filename).suffix.lower()
     project_id = str(uuid.uuid4())[:8]
@@ -284,7 +310,7 @@ async def upload_file(file: UploadFile = File(...), mode: str = "ocr"):
         "source_format": result["source_format"],
     }
 
-    return {
+    resp = {
         "project_id": project_id,
         "filename": file.filename,
         "width": result["width"],
@@ -293,6 +319,10 @@ async def upload_file(file: UploadFile = File(...), mode: str = "ocr"):
         "source_format": result["source_format"],
         "count": len(result["dimensions"]),
     }
+    # 识别失败时透传错误信息给前端展示
+    if result.get("error"):
+        resp["error"] = result["error"]
+    return resp
 
 
 @app.get("/api/image/{project_id}")

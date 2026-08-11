@@ -197,11 +197,37 @@ body {
       <p class="formats">所有数据本地处理，不上传服务器</p>
       <div style="margin-top:12px;display:flex;align-items:center;gap:8px;justify-content:center;">
         <label style="font-size:12px;color:var(--text-muted);">识别引擎：</label>
-        <select id="recognitionMode" onclick="event.stopPropagation()" onchange="event.stopPropagation()" style="padding:4px 8px;border-radius:4px;font-size:12px;">
+        <select id="recognitionMode" onclick="event.stopPropagation()" onchange="event.stopPropagation();onRecognitionModeChange(this.value)" style="padding:4px 8px;border-radius:4px;font-size:12px;">
           <option value="ocr">🔒 本地OCR（离线，数据不出本机）</option>
+          <option value="vlm">🤖 精准模式（AI 视觉，需云端API）</option>
         </select>
       </div>
-      <p style="margin-top:8px;font-size:11px;color:var(--text-muted);">🔒 图纸完全在本机处理，不会上传任何云端服务器</p>
+      <p style="margin-top:8px;font-size:11px;color:var(--text-muted);" id="privacyNote">🔒 本地OCR：图纸完全在本机处理，不上传云端</p>
+    </div>
+
+    <!-- AI 视觉配置弹窗 -->
+    <div class="modal-overlay" id="vlmConfigModal">
+      <div class="modal" style="max-width:460px">
+        <h3>🤖 精准模式配置（AI 视觉）</h3>
+        <p style="font-size:12px;color:var(--text-muted);margin-bottom:12px;">选择精准模式后，图纸图片会发送到你配置的 AI 服务进行识别。<br>请填写兼容 OpenAI 格式的视觉模型 API：</p>
+        <div class="form-group">
+          <label>API 地址 (Base URL)</label>
+          <input type="text" id="vlmBaseUrl" placeholder="https://open.bigmodel.cn/api/paas/v4" style="width:100%;">
+        </div>
+        <div class="form-group">
+          <label>API Key</label>
+          <input type="password" id="vlmApiKey" placeholder="sk-..." style="width:100%;">
+        </div>
+        <div class="form-group">
+          <label>模型名称（可选，默认 glm-4v）</label>
+          <input type="text" id="vlmModel" placeholder="glm-4v" style="width:100%;">
+        </div>
+        <p style="font-size:11px;color:var(--text-muted);">⚠️ API Key 仅保存在本机浏览器存储中，用于你自建的 AI 服务或你授权的云端服务。</p>
+        <div class="modal-actions">
+          <button class="btn btn-outline" onclick="closeVlmConfig()">取消</button>
+          <button class="btn btn-primary" onclick="saveVlmConfig()">保存配置</button>
+        </div>
+      </div>
     </div>
 
     <!-- 工具栏（上传后显示） -->
@@ -378,6 +404,67 @@ const TYPE_LABELS = {
   chamfer:'倒角', thread:'螺纹', text:'文字',
 };
 
+// ===== AI 视觉（精准模式）配置 =====
+function getVlmConfig() {
+  try {
+    return JSON.parse(localStorage.getItem('babo_vlm_config') || '{}');
+  } catch { return {}; }
+}
+function saveVlmConfig() {
+  const cfg = {
+    baseUrl: document.getElementById('vlmBaseUrl').value.trim(),
+    apiKey: document.getElementById('vlmApiKey').value.trim(),
+    model: document.getElementById('vlmModel').value.trim(),
+  };
+  localStorage.setItem('babo_vlm_config', JSON.stringify(cfg));
+  document.getElementById('vlmConfigModal').classList.remove('show');
+  // 更新隐私提示
+  updatePrivacyNote('vlm');
+  showToast('精准模式配置已保存', 'success');
+}
+function closeVlmConfig() {
+  document.getElementById('vlmConfigModal').classList.remove('show');
+  // 取消时切回本地OCR
+  document.getElementById('recognitionMode').value = 'ocr';
+  updatePrivacyNote('ocr');
+}
+function openVlmConfig() {
+  const cfg = getVlmConfig();
+  document.getElementById('vlmBaseUrl').value = cfg.baseUrl || '';
+  document.getElementById('vlmApiKey').value = cfg.apiKey || '';
+  document.getElementById('vlmModel').value = cfg.model || '';
+  document.getElementById('vlmConfigModal').classList.add('show');
+}
+function onRecognitionModeChange(mode) {
+  if (mode === 'vlm') {
+    const cfg = getVlmConfig();
+    // 没配置过 → 弹配置窗；配置过 → 直接启用
+    if (!cfg.baseUrl || !cfg.apiKey) {
+      openVlmConfig();
+    } else {
+      updatePrivacyNote('vlm');
+    }
+  } else {
+    updatePrivacyNote('ocr');
+  }
+}
+function updatePrivacyNote(mode) {
+  const note = document.getElementById('privacyNote');
+  if (mode === 'vlm') {
+    const cfg = getVlmConfig();
+    note.innerHTML = `🤖 精准模式：图纸将发送到 ${cfg.baseUrl || '已配置的AI服务'} 进行识别（你授权的云端服务）`;
+  } else {
+    note.innerHTML = '🔒 本地OCR：图纸完全在本机处理，不上传云端';
+  }
+}
+// 初始化：回填已保存的配置
+(function initVlmConfig() {
+  const cfg = getVlmConfig();
+  if (cfg.baseUrl && cfg.apiKey) {
+    updatePrivacyNote(document.getElementById('recognitionMode').value);
+  }
+})();
+
 // ===== GB/T 1804-2000 线性尺寸极限偏差表 =====
 // 数值为对称公差 ± 值，单位 mm
 const GB_TOLERANCE_TABLE = [
@@ -439,13 +526,19 @@ uploadZone.addEventListener('drop', e => {
 async function handleFile(file) {
   if (!file) return;
   const fileSizeMB = file.size / 1024 / 1024;
+  const mode = document.getElementById('recognitionMode')?.value || 'ocr';
   showLoading(`正在上传 ${fileSizeMB.toFixed(1)}MB 并识别...`);
 
   const formData = new FormData();
   formData.append('file', file);
-  // 传递识别模式
-  const mode = document.getElementById('recognitionMode')?.value || 'ocr';
   formData.append('mode', mode);
+  // 精准模式：附带用户配置的 API 信息（仅用于本次请求）
+  if (mode === 'vlm') {
+    const cfg = getVlmConfig();
+    if (cfg.baseUrl) formData.append('vlm_base_url', cfg.baseUrl);
+    if (cfg.apiKey) formData.append('vlm_api_key', cfg.apiKey);
+    if (cfg.model) formData.append('vlm_model', cfg.model);
+  }
   try {
     // 使用 AbortController 设置 5 分钟超时
     const controller = new AbortController();
@@ -463,6 +556,10 @@ async function handleFile(file) {
       throw new Error(err.detail || `上传失败 (HTTP ${res.status})`);
     }
     const data = await res.json();
+    if (data.error) {
+      showToast(data.error, 'error');
+      // 仍然显示图纸，便于手动标注
+    }
     state.projectId = data.project_id;
     state.imageUrl = `/api/image/${data.project_id}`;
     state.dimensions = data.dimensions;
