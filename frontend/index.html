@@ -197,7 +197,7 @@ body {
       <p class="formats">所有数据本地处理，不上传服务器</p>
       <div style="margin-top:12px;display:flex;align-items:center;gap:8px;justify-content:center;">
         <label style="font-size:12px;color:var(--text-muted);">识别模式：</label>
-        <select id="recognitionMode" style="padding:4px 8px;border-radius:4px;font-size:12px;">
+        <select id="recognitionMode" onclick="event.stopPropagation()" onchange="event.stopPropagation()" style="padding:4px 8px;border-radius:4px;font-size:12px;">
           <option value="ocr">⚡ 快速模式 (本地OCR)</option>
           <option value="vlm">🤖 精准模式 (AI 视觉)</option>
         </select>
