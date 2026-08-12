@@ -429,11 +429,12 @@ def _merge_dimension_sets(text_dims: list, ocr_dims: list) -> list:
         for idx, td in enumerate(merged):
             td_text = td.get("raw_text", "")
             td_x, td_y = td.get("x", 0), td.get("y", 0)
-            # 文本完全相同 或 位置相近且名义值相同
-            if td_text == ocr_text:
+            # 文本完全相同 且 位置相近(<60px) 才算重复；不同位置的相同尺寸要保留
+            # （图纸上对称孔/多处同尺寸会在不同位置出现相同文本）
+            dist = ((td_x - ocr_x) ** 2 + (td_y - ocr_y) ** 2) ** 0.5
+            if td_text == ocr_text and dist < 60:
                 dup = True
                 break
-            dist = ((td_x - ocr_x) ** 2 + (td_y - ocr_y) ** 2) ** 0.5
             if dist < 60 and td.get("nominal") == ocr_d.get("nominal") and td.get("nominal"):
                 dup = True
                 break
