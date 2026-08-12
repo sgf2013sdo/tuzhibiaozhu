@@ -1182,6 +1182,22 @@ async function exportImage() {
 
 // ===== 工具函数 =====
 function downloadBlob(blob, filename) {
+  // EXE 模式（pywebview）：浏览器 <a download> 不可用，走原生保存对话框
+  if (typeof window.pywebview !== 'undefined' && window.pywebview.api) {
+    const reader = new FileReader();
+    reader.onload = function(e) {
+      window.pywebview.api.save_file(e.target.result, filename).then(resp => {
+        try {
+          const r = JSON.parse(resp);
+          if (r.success) showToast('已保存: ' + r.message.split('/').pop(), 'success');
+          else if (r.message !== '已取消保存') showToast('保存失败: ' + r.message, 'error');
+        } catch (err) { showToast('导出完成（无法确认保存路径）', 'success'); }
+      }).catch(() => showToast('导出完成，请检查 BaboLocal/exports 目录', 'success'));
+    };
+    reader.readAsDataURL(blob);
+    return;
+  }
+  // 浏览器模式：标准下载
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url; a.download = filename;

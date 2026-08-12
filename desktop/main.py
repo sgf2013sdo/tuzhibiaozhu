@@ -2,9 +2,11 @@
 BaboLocal 桌面应用启动器
 - 后台线程启动 FastAPI 服务（绑定 localhost 随机端口）
 - pywebview 创建原生窗口加载前端页面
+- 提供文件保存 API（pywebview 不支持浏览器 <a download> 下载）
 - 启动失败时在浏览器显示错误信息
 """
 import datetime
+import base64
 _STARTUP_LOG = str(__import__('pathlib').Path.home() / 'BaboLocal' / 'startup.log')
 try:
     __import__('pathlib').Path(_STARTUP_LOG).parent.mkdir(parents=True, exist_ok=True)
@@ -121,6 +123,45 @@ def serve_error_page(port, err_msg):
         pass
 
 
+class BaboApi:
+    """pywebview JS 桥接 API：EXE 模式下浏览器 <a download> 不可用，改走这里保存文件"""
+
+    def save_file(self, base64_data: str, filename: str) -> str:
+        """保存文件到用户主目录 BaboLocal/exports/ 下，返回保存路径或错误信息"""
+        try:
+            from tkinter import Tk, filedialog
+            root = Tk()
+            root.withdraw()
+            root.attributes('-topmost', True)
+            # 默认保存目录
+            default_dir = str(Path.home() / "BaboLocal" / "exports")
+            Path(default_dir).mkdir(parents=True, exist_ok=True)
+            path = filedialog.asksaveasfilename(
+                title='保存文件', initialdir=default_dir, initialfile=filename,
+                defaultextension=Path(filename).suffix or '.xlsx',
+            )
+            root.destroy()
+            if not path:
+                return '{"success": false, "message": "已取消保存"}'
+            data = base64.b64decode(base64_data.split(',')[-1])
+            with open(path, 'wb') as f:
+                f.write(data)
+            return '{"success": true, "message": "' + path.replace('\\', '/') + '"}'
+        except Exception as e:
+            return '{"success": false, "message": "' + str(e).replace('"', "'") + '"}'
+
+    def open_exports(self) -> str:
+        """打开导出目录"""
+        try:
+            import subprocess
+            exports_dir = str(Path.home() / "BaboLocal" / "exports")
+            Path(exports_dir).mkdir(parents=True, exist_ok=True)
+            subprocess.Popen(['explorer', exports_dir])
+            return '{"success": true}'
+        except Exception as e:
+            return '{"success": false, "message": "' + str(e).replace('"', "'") + '"}'
+
+
 def main():
     err_file = str(get_uploads_dir()) + '/babo_error.log'
     try:
@@ -154,7 +195,8 @@ def main():
     if gui_available:
         try:
             webview.create_window(title='BaboLocal', url=url, width=1400, height=900,
-                                   min_size=(1000, 700), text_select=False)
+                                   min_size=(1000, 700), text_select=False,
+                                   js_api=BaboApi())
             webview.start(debug=False)
         except Exception as e:
             print(f"[WARN] 窗口不可用: {e}")

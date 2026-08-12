@@ -18,6 +18,7 @@ TYPE_CN = {
     "angle": "角度",
     "chamfer": "倒角",
     "thread": "螺纹",
+    "gdt": "形位公差",
     "text": "文字",
 }
 
@@ -29,6 +30,7 @@ TYPE_COLORS = {
     "angle": "#9C27B0",
     "chamfer": "#607D8B",
     "thread": "#F44336",
+    "gdt": "#00BCD4",
     "text": "#795548",
 }
 

@@ -575,7 +575,9 @@ def _derive_symbol(dim_type: str) -> str:
 
 
 def _ocr_image(img_path: str, render_scale: float = 1.0) -> list:
-    """对图片执行 OCR，返回 dimensions 列表"""
+    """对图片执行 OCR，返回 dimensions 列表
+    支持竖向尺寸标注：旋转 +90°/-90° 各识别一次，坐标映射回原图后合并
+    """
     ocr = _get_ocr()
     # 对大图做缩限，避免 OCR 太慢导致超时
     img = Image.open(img_path)
@@ -591,17 +593,52 @@ def _ocr_image(img_path: str, render_scale: float = 1.0) -> list:
         img_resized.save(tmp_path, "PNG")
         print(f"[INFO] 图片缩放: {orig_w}x{orig_h} -> {new_w}x{new_h}")
         result, _ = ocr(str(tmp_path))
-        # OCR 坐标基于缩放后图片，需乘以放大因子恢复到原始坐标
-        # 再乘以 render_scale（PDF 渲染时的 DPI 缩放）
         scale_factor = (1.0 / resize_scale) * render_scale
     else:
         result, _ = ocr(str(img_path))
         scale_factor = render_scale
 
-    if not result:
+    all_results = list(result) if result else []
+
+    # 竖向文字识别：旋转 ±90° 再 OCR，bbox 映射回原图坐标
+    # RapidOCR 对旋转 90° 的竖排文本识别率极低，旋转后文字变水平即可识别
+    try:
+        work_w = int(orig_w * resize_scale)
+        work_h = int(orig_h * resize_scale)
+        base = img_resized if resize_scale < 1.0 else img
+        for angle in (90, -90):
+            rot = base.rotate(angle, expand=True)
+            rot_path = img_path.replace(".png", f"_rot{angle}.png")
+            rot.save(rot_path, "PNG")
+            rot_result, _ = ocr(str(rot_path))
+            if not rot_result:
+                continue
+            rw, rh = rot.width, rot.height
+            for item in rot_result:
+                bbox, text, conf = item[0], item[1], item[2]
+                # 把旋转图的 bbox 映射回原图（缩放前）坐标系
+                # PIL rotate(正角度)=逆时针; rotate(-90)=顺时针
+                new_pts = []
+                for (px, py) in bbox:
+                    if angle == 90:
+                        # 逆时针90°: 原(x,y) -> 旋(x'=y, y'=H-1-x)，rot=(H,W)
+                        # 逆映射: 原(x=rh-1-y', y=x')   （rh=原W）
+                        nx = rh - 1 - py
+                        ny = px
+                    else:
+                        # 顺时针90°: 原(x,y) -> 旋(x'=H-1-y, y'=x)，rot=(H,W)
+                        # 逆映射: 原(x=y', y=rw-1-x')   （rw=原H）
+                        nx = py
+                        ny = rw - 1 - px
+                    new_pts.append([nx, ny])
+                all_results.append([new_pts, text, conf])
+    except Exception as e:
+        print(f"[WARN] 旋转OCR失败(可忽略): {e}")
+
+    if not all_results:
         return []
 
-    return _filter_and_parse_ocr_results(result, scale_factor=scale_factor,
+    return _filter_and_parse_ocr_results(all_results, scale_factor=scale_factor,
                                           img_w=orig_w, img_h=orig_h)
 
 
