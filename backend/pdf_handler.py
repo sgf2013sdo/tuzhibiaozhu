@@ -49,6 +49,11 @@ def _parse_dim_text(text: str) -> dict:
     text = text.replace("⊙", "◎").replace("⌀", "Ø")  # ⊙是同轴度符号, ⌀是直径
     # OCR 常把 Ø 读成 @（如 @103±0.10）
     text = re.sub(r'@(?=\s*\d)', 'Ø', text)
+    # 修复 @ 被 OCR 放到数字后面（如 08@ -> Ø80, 103@ -> Ø103）
+    # 08@ = Ø符号被读成0放开头 + 末位数字0被读成@ -> 恢复为 Ø80
+    # 必须放在 0 前缀转 Ø 规则之前，否则 08@ 会被先转成 Ø8@
+    text = re.sub(r'^0(\d+)@$', lambda m: 'Ø' + m.group(1) + '0', text)
+    text = re.sub(r'^(\d+)@', r'Ø\1', text)
     # 修复 OCR 把 Ø 读成 0 的情况：0后面紧跟数字且整体看起来像直径
     # 例如 "060" -> "Ø60", "0160" -> "Ø160", "010" -> "Ø10"
     # 排除小数（0.05 / 00.05 是公差值，不是 Ø 误读）
@@ -59,6 +64,10 @@ def _parse_dim_text(text: str) -> dict:
     text = re.sub(r'(\d+\s*[×xX*]\s*)0(\d{1,3})\b', r'\1Ø\2', text)
     # 修复 ± 被读成 + 或其他符号
     text = text.replace("土", "±").replace("干", "±")
+    # 修复 @ 被 OCR 放到数字后面（如 08@ -> Ø80, 103@ -> Ø103）
+    # 08@ = Ø符号被读成0放开头 + 末位数字0被读成@ -> 恢复为 Ø80
+    text = re.sub(r'^0(\d+)@$', lambda m: 'Ø' + m.group(1) + '0', text)
+    text = re.sub(r'^(\d+)@', r'Ø\1', text)
     # 修复小写 φ 被 OCR 读成 $ 或其它符号的情况
     text = re.sub(r'\$(\d)', r'φ\1', text)
     # 修复 Φ/φ 被 OCR 读成 O 开头的情况（如 O10 -> Ø10）
@@ -68,8 +77,12 @@ def _parse_dim_text(text: str) -> dict:
     text = re.sub(r'^[^\dØ⌀ΦφRMC°%%]*([Ø⌀Φφ])', r'\1', text)
     # 修复 R 前面多了多余字符的情况（确保半径 R 不被直径修复正则干扰）
     text = re.sub(r'^[^Ø⌀ΦφRMC°%%\d\s]+(R\s*\d)', r'\1', text)
-    # 压缩数字中间的空格（OCR 常把 "92. 20" 识别成 "92. 20"）
-    text = re.sub(r'(\d)\s+(\d)', r'\1\2', text)
+    # 压缩数字中间的空格（OCR 常把 "92. 20" 识别成 "92. 20", "0. 096", "±0. 10"）
+    text = re.sub(r'(?<=\d)\s+(?=\d)', '', text)       # 6 30 -> 630
+    text = re.sub(r'(?<=\d)\s+\.', '.', text)           # 6. 30 -> 6.30
+    text = re.sub(r'\.\s+(?=\d)', '.', text)            # 0. 096 -> 0.096
+    text = re.sub(r'(?<=[±+])\s+(?=\d)', '', text)      # ± 0.10 -> ±0.10
+    text = re.sub(r'(?<=[×xX])\s+(?=\d)', '', text)     # 4× 60 -> 4×60
     result = {"raw": text}
 
     # 形位公差（GD&T）：符号 + 公差值 + 基准字母
@@ -170,11 +183,28 @@ def _parse_dim_text(text: str) -> dict:
     if result["type"] == "thread":
         clean = re.sub(r"^M\s*", "", clean)
 
-    # 数量前缀（支持 4-R7.50, 4×Ø10, 8-R4 等）
-    qty_match = re.match(r"(\d+)\s*[×xX*\-]\s*(.+)", clean)
+    # 数量前缀（支持 4-R7.50, 4×Ø10, 8-R4, 4-Ø6.30 等）
+    # 注意: "-" 后跟字母(R/C/M/Ø)才是数量; "-" 后跟数字是单边公差(如 30-0.1)
+    # 用原始 text 匹配（clean 已剥离 Ø/⌀，会漏掉 4-Ø6.30）
+    qty_match = re.match(r"(\d+)\s*(?:[×xX*]\s*(.+)|-\s*([RMCØ⌀Φφ])\s*(\d.*))", text)
     if qty_match:
         result["quantity"] = int(qty_match.group(1))
-        clean = qty_match.group(2)
+        if qty_match.group(2) is not None:
+            clean = qty_match.group(2)
+        else:
+            clean = qty_match.group(3) + qty_match.group(4)  # 符号+数字（如 Ø6.30）
+    # 单边公差: 30-0.1 (nominal=30, lower=-0.1) / 30+0.1 (upper=+0.1)
+    # 必须在数量匹配之后、±匹配之前处理
+    single_tol = re.match(r"(\d+\.?\d*)\s*([+-])\s*(\d+\.?\d*)$", clean)
+    if single_tol:
+        result["nominal"] = single_tol.group(1)
+        if single_tol.group(2) == "+":
+            result["upper_tol"] = f"+{single_tol.group(3)}"
+            result["lower_tol"] = ""
+        else:
+            result["upper_tol"] = ""
+            result["lower_tol"] = f"-{single_tol.group(3)}"
+        return result
 
     # 公差 ±
     tol_match = re.search(r"([+-]?\d+\.?\d*)\s*±\s*(\d+\.?\d*)", clean)
@@ -244,6 +274,18 @@ def _is_dimension_like(text: str) -> bool:
     # 排除包含中文的非尺寸文字（如 "材料: Q235", "零件名称: 测试零件"）
     if re.search(r"[\u4e00-\u9fff]", text):
         return False
+    # 排除英文 BOM/说明文字（PLATE, WIDTH, LENGTH, OF, LBS 等）
+    # 但保留单字母前缀的尺寸符号（R49/M6/C2/Ø10）和 GD&T
+    if re.search(r"[A-Za-z]{3,}", text):
+        return False
+    # 排除日期（12/17/2024, 2024-12-17 等）
+    if re.match(r"^\d{1,2}[/-]\d{1,2}[/-]\d{2,4}$", text):
+        return False
+    # 排除页码（1 OF 3 / PAGE 2 / SHEET 1）和公差格式说明（X.XX 0.25）
+    if re.match(r"^\d+\s+OF\s+\d+$", text):
+        return False
+    if re.match(r"^X\.?X{1,3}\s+\d", text):
+        return False
     # 排除包含 "Q" 开头的材料标注（如 Q235）
     if re.match(r"^Q\d", text):
         return False
@@ -253,6 +295,20 @@ def _is_dimension_like(text: str) -> bool:
     # 排除全是相同数字的（如 0000）
     if len(text) >= 3 and len(set(text.replace(".", ""))) == 1:
         return False
+    # 排除 OCR 残渣：孤立小数点/公差符号（±0. / -0. / .50 / 0. / ①87.）
+    if re.match(r"^[±+\-]\s*0?\.?\d*\.?$", text) and text.count(".") <= 1:
+        return False  # 纯公差残渣如 ±0. -0. +0.
+    if re.match(r"^\.\d+$", text):
+        return False  # .50 无主数字
+    if re.match(r"^\d+\.$", text):
+        return False  # 0. 87. 结尾孤立小数点
+    if re.match(r"^[①-⑳①②…]\d", text):
+        return False  # ①87. 圆圈数字残渣
+    # 纯公差碎片：±0.05 / -0.10 / +0.02（无主尺寸，是完整标注被拆出的公差部分）
+    # 先去空格再判断（OCR 常输出 "±0. 05" 这种带空格形态）
+    no_space = text.replace(" ", "")
+    if re.match(r"^[±+\-]\d+\.?\d*$", no_space):
+        return False
     return True
 
 
@@ -260,7 +316,7 @@ def _filter_and_parse_ocr_results(ocr_results: list, scale_factor: float = 1.0, 
     """
     从 OCR 结果中筛选尺寸标注
     ocr_results: [[bbox, text, confidence], ...]
-    img_w/img_h: 图片原始尺寸（用于过滤边缘位置标记框）
+    img_w/img_h: 图片原始尺寸（用于过滤边缘位置标记框 + 右下角图签区）
     返回: [dimension_dict, ...]
     """
     dimensions = []
@@ -271,6 +327,12 @@ def _filter_and_parse_ocr_results(ocr_results: list, scale_factor: float = 1.0, 
     # 边缘宽度 = 图片宽高的 6%（位置标记通常在边框外侧的窄条内）
     edge_w = img_w * 0.06 if img_w > 0 else 0
     edge_h = img_h * 0.06 if img_h > 0 else 0
+
+    # 底部图签区（标题栏）过滤：工程图纸标题栏通常在底部整条横带
+    # （材料/名称/设计/审核/日期/图号/比例等），不做尺寸标注
+    # 图签区 ≈ 底部 100% 宽 × 25% 高的横带（标准 A4/A3 标题栏比例）
+    tb_h = img_h * 0.25 if img_h > 0 else 0
+    tb_y0 = img_h - tb_h if img_h > 0 else 0
 
     for item in ocr_results:
         if not item or len(item) < 3:
@@ -304,6 +366,12 @@ def _filter_and_parse_ocr_results(ocr_results: list, scale_factor: float = 1.0, 
                        cy < edge_h or cy > img_h - edge_h)
             if on_edge and len(text) <= 3 and re.match(r'^[\dA-Za-z]+$', text):
                 continue  # 位置标记，跳过
+
+        # 底部图签区过滤：标题栏内的文字（材料/名称/设计/审核/日期/图号/比例）
+        # 尺寸标注不会出现在标题栏内部，直接整区跳过
+        if tb_h > 0:
+            if cy >= tb_y0:
+                continue  # 图签区，跳过
 
         # 空间去重：相同文本且位置相近(50px内)才算重复，不同位置保留
         # 工程图纸同一数值可能出现在多处（对称孔、多处同尺寸）
@@ -357,7 +425,8 @@ def _merge_dimension_sets(text_dims: list, ocr_dims: list) -> list:
         ocr_norm = norm(ocr_text)
 
         dup = False
-        for td in merged:
+        replace_idx = -1  # 若新标注更完整，记录要替换的碎片下标
+        for idx, td in enumerate(merged):
             td_text = td.get("raw_text", "")
             td_x, td_y = td.get("x", 0), td.get("y", 0)
             # 文本完全相同 或 位置相近且名义值相同
@@ -368,7 +437,28 @@ def _merge_dimension_sets(text_dims: list, ocr_dims: list) -> list:
             if dist < 60 and td.get("nominal") == ocr_d.get("nominal") and td.get("nominal"):
                 dup = True
                 break
-        if not dup:
+            # 旋转OCR碎片过滤：如 "±0.10" 是 "@103±0.10" 的碎片，
+            # 位置相近(<150px)且一个是另一个的子串/公差碎片 -> 丢弃碎片
+            if dist < 150:
+                td_n = norm(td_text)
+                ocr_n = norm(ocr_text)
+                # 纯公差碎片（±x / +x / -x）并入完整标注
+                if re.match(r'^[±+\-]\d', ocr_n) and (td_n in ocr_n or ocr_n in td_n or td.get("nominal") == ocr_d.get("nominal", "")):
+                    dup = True
+                    break
+                if re.match(r'^[±+\-]\d', td_n) and (ocr_n in td_n or td_n in ocr_n or td.get("nominal") == ocr_d.get("nominal", "")):
+                    dup = True
+                    break
+                # 完整标注包含碎片文本：保留更长的完整标注，替换碎片
+                if len(ocr_n) > len(td_n) and td_n in ocr_n and len(td_n) >= 3:
+                    replace_idx = idx
+                    break
+                if len(td_n) > len(ocr_n) and ocr_n in td_n and len(ocr_n) >= 3:
+                    dup = True
+                    break
+        if replace_idx >= 0:
+            merged[replace_idx] = ocr_d  # 用完整标注替换碎片
+        elif not dup:
             merged.append(ocr_d)
 
     # 重新编号
@@ -580,12 +670,15 @@ def _ocr_image(img_path: str, render_scale: float = 1.0) -> list:
     """
     ocr = _get_ocr()
     # 对大图做缩限，避免 OCR 太慢导致超时
+    # 注意: 缩放会丢失小字号文字（如 12.50±0.1），阈值取 2500 且最低缩放比 0.75
     img = Image.open(img_path)
-    max_dim = 2000  # 最大边长 2000px
+    max_dim = 2500  # 最大边长 2500px（原 2000 太小，缩放后小字识别丢失）
     orig_w, orig_h = img.width, img.height
     resize_scale = 1.0  # 缩放到 OCR 图的坐标映射因子
     if orig_w > max_dim or orig_h > max_dim:
         resize_scale = max_dim / max(orig_w, orig_h)
+        if resize_scale < 0.75:
+            resize_scale = 0.75  # 最低 0.75，避免过度缩小丢字
         new_w = int(orig_w * resize_scale)
         new_h = int(orig_h * resize_scale)
         img_resized = img.resize((new_w, new_h), Image.LANCZOS)
@@ -602,6 +695,28 @@ def _ocr_image(img_path: str, render_scale: float = 1.0) -> list:
 
     # 竖向文字识别：旋转 ±90° 再 OCR，bbox 映射回原图坐标
     # RapidOCR 对旋转 90° 的竖排文本识别率极低，旋转后文字变水平即可识别
+    # 关键：旋转结果与 0° 结果 bbox 重叠的丢弃（那是横排文字，0° 已识别，
+    # 旋转会重复识别并产生碎片如 ±0. / ①87. / 4-RO.）
+
+    def _bbox_overlap_ratio(pts_a, pts_b):
+        """计算两个 bbox 的重叠比例（基于面积交并比）"""
+        try:
+            ax0 = min(p[0] for p in pts_a); ax1 = max(p[0] for p in pts_a)
+            ay0 = min(p[1] for p in pts_a); ay1 = max(p[1] for p in pts_a)
+            bx0 = min(p[0] for p in pts_b); bx1 = max(p[0] for p in pts_b)
+            by0 = min(p[1] for p in pts_b); by1 = max(p[1] for p in pts_b)
+            ix0 = max(ax0, bx0); ix1 = min(ax1, bx1)
+            iy0 = max(ay0, by0); iy1 = min(ay1, by1)
+            if ix1 <= ix0 or iy1 <= iy0:
+                return 0.0
+            inter = (ix1 - ix0) * (iy1 - iy0)
+            area_a = max(1, (ax1 - ax0) * (ay1 - ay0))
+            area_b = max(1, (bx1 - bx0) * (by1 - by0))
+            return inter / min(area_a, area_b)  # 用较小框作分母，更容易判重叠
+        except Exception:
+            return 0.0
+
+    base_results = list(result) if result else []
     try:
         work_w = int(orig_w * resize_scale)
         work_h = int(orig_h * resize_scale)
@@ -631,6 +746,15 @@ def _ocr_image(img_path: str, render_scale: float = 1.0) -> list:
                         nx = py
                         ny = rw - 1 - px
                     new_pts.append([nx, ny])
+                # 与 0° 结果重叠过滤：重叠率高说明是横排文字重复识别，跳过
+                is_dup_rot = False
+                for base_item in base_results:
+                    base_bbox = base_item[0]
+                    if _bbox_overlap_ratio(new_pts, base_bbox) > 0.5:
+                        is_dup_rot = True
+                        break
+                if is_dup_rot:
+                    continue
                 all_results.append([new_pts, text, conf])
     except Exception as e:
         print(f"[WARN] 旋转OCR失败(可忽略): {e}")
