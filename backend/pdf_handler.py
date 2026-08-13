@@ -91,11 +91,12 @@ def _parse_dim_text(text: str) -> dict:
     # 注意: ◎ 是同轴度GD&T符号，不是直径，必须在这里先匹配
     gdt_symbols = r'[⌁⊥∥⌒◎○⌭⌖⏣⌓∠⏥◇◆⌯]'
     gdt_text = text.strip()
-    # 标准化 OCR 误读的符号
+    # 标准化 OCR 误读的符号（仅做不会误伤数字的安全替换）
     gdt_text = re.sub(r'^//+', '∥', gdt_text)   # // -> 平行度
     gdt_text = re.sub(r'^\|\|', '∥', gdt_text)
-    gdt_text = re.sub(r'^11(?=\s*\d)', '⌁', gdt_text)  # OCR把⌁读成11
     gdt_text = re.sub(r'^L(?=\s*0\.\d)', '⊥', gdt_text)  # OCR把⊥读成L
+    # 注意: 11->⌁ 和 1->⊥ 的替换可能误伤真实尺寸(116.25/10.1)，
+    # 只在 gdt_text2（要求带基准字母）中做
     # 注意: 不要在这里把 ^0 当符号替换（会把 0.05 数值吃掉变成 ⌁.05），
     # 符号完全丢失的情况由下方 fallback（值+基准字母）兜底
     # 匹配: 符号 + 公差值 + (可选)1-3个基准字母
@@ -117,10 +118,13 @@ def _parse_dim_text(text: str) -> dict:
     # 符号被丢弃后只剩 "值 + 基准字母"（如 0.05 A / 0.1 A B），或符号被误读
     # 成 1/I1/0（如 ⊥0.1 -> 10.1, ∥0.02 -> I10.02, ⌁0.05 -> 0.05 A）
     gdt_text2 = gdt_text
-    # 误读归一：I1 开头 -> 平行度符号被读成 I1
+    # 误读归一：I1 开头 -> 平行度符号被读成 I1（I10.02 A -> ∥0.02 A）
     gdt_text2 = re.sub(r'^I1(?=\s*\d)', '∥', gdt_text2)
-    # ⊥0.1 被读成 10.1（仅当 1 后面是 0.x 小数；12.5 这类真实尺寸不能动）
-    gdt_text2 = re.sub(r'^1(?=\s*0\.\d)', '⊥', gdt_text2)
+    # ⊥0.1 被读成 10.1 / ⌁0.05 被读成 110.05：
+    # 仅当 1/11 后面是 0.x 小数 且 后面跟基准字母(A/B/C) 才替换，
+    # 避免误伤 10.1 / 10.00 / 116.25 / 110.05 等真实尺寸
+    gdt_text2 = re.sub(r'^1(?=\s*0\.\d+\s*[A-HJ-Z])', '⊥', gdt_text2)
+    gdt_text2 = re.sub(r'^11(?=\s*0?\.\d+\s*[A-HJ-Z])', '⌁', gdt_text2)
     # 纯符号丢失：^值 + 基准字母 且值为典型公差量级(<=1) -> 位置度(最常见, 标记symbol为空)
     gdt_fallback = re.match(
         r'^(\d+\.?\d*)\s+([A-HJ-Z](\s*[A-HJ-Z]){0,2})$',
@@ -144,14 +148,20 @@ def _parse_dim_text(text: str) -> dict:
         gdt_text2
     )
     if gdt_match2:
-        result["type"] = "gdt"
-        result["symbol"] = gdt_match2.group(1)
-        result["nominal"] = gdt_match2.group(2).replace("Ø", "").replace("ø", "").replace(" ", "").lstrip("<>")
-        result["datums"] = (gdt_match2.group(3) or "").replace(" ", "")
-        result["upper_tol"] = ""
-        result["lower_tol"] = ""
-        result["quantity"] = 1
-        return result
+        # 关键防误伤: 误读归一(^11->⌁, ^1->⊥)可能把真实尺寸吃掉
+        # (如 116.25->⌁6.25, 10.00->⊥0.00)。真实 GD&T 公差值几乎都在 (0,1] 区间，
+        # 值 >1 或 =0 的不可能是误读符号后的公差 -> 拒绝，落到线性/直径解析
+        gdt_val = float(gdt_match2.group(2).replace("Ø", "").replace("ø", "").replace(" ", "").lstrip("<>") or 0)
+        if 0 < gdt_val <= 1.0:
+            result["type"] = "gdt"
+            result["symbol"] = gdt_match2.group(1)
+            result["nominal"] = gdt_match2.group(2).replace("Ø", "").replace("ø", "").replace(" ", "").lstrip("<>")
+            result["datums"] = (gdt_match2.group(3) or "").replace(" ", "")
+            result["upper_tol"] = ""
+            result["lower_tol"] = ""
+            result["quantity"] = 1
+            return result
+        # 值不在公差区间 -> 不是 GD&T，继续走下面的类型判断（此时 text 仍是原始文本）
 
     # 直径
     if any(c in text for c in ["Ø", "⌀", "Φ", "φ", "%%C", "%%c"]):
@@ -748,10 +758,16 @@ def _ocr_image(img_path: str, render_scale: float = 1.0) -> list:
                         ny = rw - 1 - px
                     new_pts.append([nx, ny])
                 # 与 0° 结果重叠过滤：重叠率高说明是横排文字重复识别，跳过
+                # 用中心距离(60px)判断比 bbox 面积重叠更稳健——
+                # 旋转 OCR 可能把 7.5 误读成 55，bbox 只有部分重叠但中心很近
                 is_dup_rot = False
+                rx = sum(p[0] for p in new_pts) / len(new_pts)
+                ry = sum(p[1] for p in new_pts) / len(new_pts)
                 for base_item in base_results:
                     base_bbox = base_item[0]
-                    if _bbox_overlap_ratio(new_pts, base_bbox) > 0.5:
+                    bx = sum(p[0] for p in base_bbox) / len(base_bbox)
+                    by = sum(p[1] for p in base_bbox) / len(base_bbox)
+                    if ((rx - bx) ** 2 + (ry - by) ** 2) ** 0.5 < 60:
                         is_dup_rot = True
                         break
                 if is_dup_rot:
